@@ -173,6 +173,12 @@ else if (_access is not null)
                     {
                         <span>Select an event for details</span>
                     }
+                    @if (r.Shape == ResultShape.Events && r.Columns.Any(c => c is "message" or "raw"))
+                    {
+                        <button type="button" class="dg-meta-toggle" aria-pressed="@(_expanded ? "true" : "false")" @onclick="() => _expanded = !_expanded">
+                            @(_expanded ? "Show one line per event" : "Show full messages")
+                        </button>
+                    }
                 </div>
 
                 @if (r.Shape == ResultShape.Timechart)
@@ -204,6 +210,16 @@ else if (_access is not null)
                                         else if (text.Length == 0 && r.Shape != ResultShape.Events)
                                         {
                                             <td class="text-nowrap dg-empty">(empty)</td>
+                                        }
+                                        else if (column is "message" or "raw" && !_expanded)
+                                        {
+                                            var (first, more) = FirstLine(text);
+                                            <td class="dg-log dg-log-line" title="@(more > 0 ? null : text)">
+                                                <div><span>@first</span>@if (more > 0)
+                                                {
+                                                    <span class="dg-more">+@more.ToString(CultureInfo.InvariantCulture) @(more == 1 ? "line" : "lines")</span>
+                                                }</div>
+                                            </td>
                                         }
                                         else
                                         {
@@ -334,6 +350,7 @@ else if (_access is not null)
     private QueryResult? _result;
     private List<ResultRow> _rows = [];
     private bool _clickable;
+    private bool _expanded; // message and raw cells: one line each (default) or in full
 
     private IReadOnlyList<FieldValues> _summary = [];
     private bool _summaryLoading;
@@ -670,6 +687,30 @@ else if (_access is not null)
         _ when IsNumber(value) => "text-nowrap text-end",
         _ => "text-nowrap",
     };
+
+    /// <summary>The first non-blank line of a message, and how many more non-blank lines follow it.</summary>
+    private static (string First, int More) FirstLine(string text)
+    {
+        var lines = text.Split('\n');
+        var first = -1;
+        var more = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i]))
+            {
+                continue;
+            }
+            if (first < 0)
+            {
+                first = i;
+            }
+            else
+            {
+                more++;
+            }
+        }
+        return first < 0 ? (text, 0) : (lines[first].Trim(), more);
+    }
 
     private static bool IsNumber(object? value) => value is double or float or long or ulong or int or uint or short or ushort or byte or decimal;
 
