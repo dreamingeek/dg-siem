@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <RootNamespace>DreaminGeek.Siem.Agent</RootNamespace>
+    <AssemblyName>dg-siem-agent</AssemblyName>
+    <!-- Ships as a single native binary per site (one collector per client site). -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Source-generated P/Invoke for the Windows event log API. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UserSecretsId>dg-siem-agent</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DreaminGeek.Siem.Core\DreaminGeek.Siem.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Kestrel for the HEC input (slim builder, raw request handler: AOT-safe). -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DreaminGeek.Siem.Tests" />
+  </ItemGroup>
+
+  <!--
+    BuildInfo.Version and a marker the server finds in the binary ("DG-SIEM-AGENT-VERSION=0.4.0;"), so an uploaded
+    agent identifies its own version without being run.
+  -->
+  <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <BuildInfoFile>$(IntermediateOutputPath)BuildInfo.g.cs</BuildInfoFile>
+      <BuildInfoText>// Generated from $(Version).
+namespace DreaminGeek.Siem.Agent%3B
+
+internal static class BuildInfo
+{
+    public const string Version = "$(Version)"%3B
+    public const string Marker = "DG-SIEM-AGENT-VERSION=" + Version + "%3B"%3B
+}
+</BuildInfoText>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(BuildInfoFile)" Lines="$(BuildInfoText)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(BuildInfoFile)" />
+      <FileWrites Include="$(BuildInfoFile)" />
+    </ItemGroup>
+  </Target>
+</Project>

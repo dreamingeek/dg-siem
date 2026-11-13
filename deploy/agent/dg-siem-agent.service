@@ -1,0 +1,36 @@
+[Unit]
+Description=DG SIEM collector agent
+Documentation=https://github.com/dreamingeek/dg-siem
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=dg-siem-agent
+Group=dg-siem-agent
+ExecStart=/usr/local/bin/dg-siem-agent
+WorkingDirectory=/var/lib/dg-siem-agent
+Environment=DOTNET_gcServer=0
+Restart=always
+RestartSec=5
+
+# Bind syslog's privileged ports (514/6514) without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening: the agent only needs its data directory and the network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/dg-siem-agent
+StateDirectory=dg-siem-agent
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,504 @@
+@page "/alerts/new"
+@page "/alerts/{Id:guid}"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Alerts
+@using DreaminGeek.Siem.Web.Security
+@inject AlertAdminService Alerts
+@inject TenantAccess Access
+@inject NavigationManager Nav
+
+<PageTitle>@(Id is null ? "New alert" : _form.Name) · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>@(Id is null ? "New alert" : "Edit alert")</h1>
+    <p><a href="alerts">Alerts</a>@(Id is null ? "" : " / " + _form.Name)</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_missing)
+    {
+        <div class="alert alert-warning small">That alert doesn't exist any more. <a href="alerts">Back to alerts</a></div>
+    }
+    else
+    {
+        <form class="dg-alert-form" @onsubmit="SaveAsync" @onsubmit:preventDefault>
+            <section class="dg-panel mb-3">
+                <header><h2>@(_form.Kind == AlertRuleKind.Search ? "Search" : "Health check")</h2></header>
+                <div class="dg-body row g-3">
+                    <div class="col-lg-6">
+                        <label class="form-label small" for="aname">Name</label>
+                        <input id="aname" class="form-control form-control-sm" @bind="_form.Name" placeholder="Firewall blocks from one source" maxlength="200" />
+                    </div>
+                    <div class="col-lg-6">
+                        <label class="form-label small" for="adesc">Description <span class="text-body-secondary">(optional, included in the alert)</span></label>
+                        <input id="adesc" class="form-control form-control-sm" @bind="_form.Description" placeholder="What it means and what to check first" />
+                    </div>
+                    @if (_form.Kind == AlertRuleKind.Search)
+                    {
+                    <div class="col-12">
+                        <label class="form-label small" for="aquery">Search</label>
+                        <input id="aquery" class="form-control dg-query" @bind="_form.Query" @bind:event="oninput" spellcheck="false" autocomplete="off"
+                               data-dg-assist role="combobox" aria-autocomplete="list" aria-expanded="false"
+                               placeholder="dataset=unifi.firewall action=blocked | stats count() by src | where count > 100" />
+                        <div class="form-text">
+                            Event searches alert on how many events match. Searches ending in stats, top or table alert on how many rows they return.
+                        </div>
+                    </div>
+                    }
+                    else
+                    {
+                        <div class="col-12 small">
+                            @if (_form.Kind == AlertRuleKind.QuietSources)
+                            {
+                                <p class="mb-0">
+                                    Alerts when a host stops sending a dataset for longer than it usually goes silent, judged on its own last 8 days:
+                                    a firewall that logs all the time after about two silent hours, a PBX that's quiet every night only after it misses more than a night.
+                                    New and occasional sources are left out. One alert per tenant lists every quiet source; ignore retired ones on the
+                                    <a href="admin/health">Health</a> page.
+                                </p>
+                            }
+                            else
+                            {
+                                <p class="mb-0">
+                                    Alerts when an agent stops checking in for 30 minutes, or when events have waited in its buffer for over 30 minutes
+                                    (it's connected but they aren't getting through). One alert per tenant lists every agent with a problem.
+                                </p>
+                            }
+                        </div>
+                    }
+                    <div class="col-sm-6 col-lg-3">
+                        <label class="form-label small" for="atenant">Tenant</label>
+                        <select id="atenant" class="form-select form-select-sm" @bind="_form.Tenant">
+                            <option value="">Each tenant separately</option>
+                            @foreach (var t in _tenants)
+                            {
+                                <option value="@t">@t</option>
+                            }
+                        </select>
+                    </div>
+                    @if (_form.Kind == AlertRuleKind.Search)
+                    {
+                    <div class="col-sm-6 col-lg-3">
+                        <label class="form-label small" for="arange">Looks back over</label>
+                        <select id="arange" class="form-select form-select-sm" @bind="_form.TimeRange">
+                            @foreach (var (value, label) in Lookbacks(_form.TimeRange))
+                            {
+                                <option value="@value">@label</option>
+                            }
+                        </select>
+                    </div>
+                    }
+                </div>
+            </section>
+
+            <section class="dg-panel mb-3">
+                <header><h2>When to alert</h2></header>
+                <div class="dg-body row g-3">
+                    @if (_form.Kind == AlertRuleKind.Search)
+                    {
+                    <div class="col-sm-6 col-lg-3">
+                        <label class="form-label small" for="acond">Alert when the search finds</label>
+                        <select id="acond" class="form-select form-select-sm" @bind="_form.Condition">
+                            <option value="@AlertCondition.AnyResults">anything</option>
+                            <option value="@AlertCondition.CountGreaterThan">more than…</option>
+                            <option value="@AlertCondition.CountLessThan">fewer than…</option>
+                        </select>
+                    </div>
+                    @if (_form.Condition != AlertCondition.AnyResults)
+                    {
+                        <div class="col-sm-6 col-lg-2">
+                            <label class="form-label small" for="athr">@(_form.Condition == AlertCondition.CountLessThan ? "Fewer than" : "More than")</label>
+                            <input id="athr" type="number" min="0" class="form-control form-control-sm" @bind="_form.Threshold" />
+                        </div>
+                    }
+                    <div class="col-sm-6 col-lg-3">
+                        <label class="form-label small" for="atrig">Send</label>
+                        <select id="atrig" class="form-select form-select-sm" @bind="_form.Trigger" disabled="@(_form.Condition == AlertCondition.CountLessThan)">
+                            <option value="@AlertTrigger.Once">one alert per run</option>
+                            <option value="@AlertTrigger.PerResult">one alert per result row</option>
+                        </select>
+                    </div>
+                    }
+                    <div class="col-sm-6 col-lg-2">
+                        <label class="form-label small" for="asev">Severity</label>
+                        <select id="asev" class="form-select form-select-sm" @bind="_form.Severity">
+                            @foreach (var s in Enum.GetValues<AlertSeverity>())
+                            {
+                                <option value="@s">@s</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-12 form-text mt-1">
+                        @if (_form.Kind != AlertRuleKind.Search)
+                        {
+                            <span>One alert per tenant with everything that's wrong. While the same things stay wrong, it stays quiet for the repeat period below; anything newly wrong alerts again.</span>
+                        }
+                        else if (_form.Condition == AlertCondition.CountLessThan)
+                        {
+                            <span>Good for silence: e.g. fewer than 1 event from a firewall in an hour means it stopped sending logs.</span>
+                        }
+                        else if (_form.Trigger == AlertTrigger.PerResult)
+                        {
+                            <span>Each row is its own alert, e.g. <code>stats count() by src</code> alerts once per source address (up to @AlertEvaluator.MaxGroups per run).</span>
+                        }
+                        else
+                        {
+                            <span>One alert covering everything the search found, with the first @AlertEvaluator.SampleRows results attached.</span>
+                        }
+                    </div>
+                </div>
+            </section>
+
+            <section class="dg-panel mb-3">
+                <header><h2>Schedule and repeats</h2></header>
+                <div class="dg-body row g-3">
+                    <div class="col-sm-6 col-lg-3">
+                        <label class="form-label small" for="apreset">Runs</label>
+                        <select id="apreset" class="form-select form-select-sm" value="@PresetValue" @onchange="OnPreset">
+                            @foreach (var (cron, label) in AlertAdminService.SchedulePresets)
+                            {
+                                <option value="@cron">@label</option>
+                            }
+                            <option value="custom">Custom (cron)</option>
+                        </select>
+                    </div>
+                    @if (PresetValue == "custom")
+                    {
+                        <div class="col-sm-6 col-lg-3">
+                            <label class="form-label small" for="acron">Cron schedule <span class="text-body-secondary">(@_timeZone)</span></label>
+                            <input id="acron" class="form-control form-control-sm dg-query" @bind="_form.Schedule" @bind:event="oninput" placeholder="*/10 * * * *" />
+                        </div>
+                    }
+                    <div class="col-sm-6 col-lg-3">
+                        <label class="form-label small" for="aquiet">After alerting, stay quiet for</label>
+                        <select id="aquiet" class="form-select form-select-sm" @bind="_form.SuppressMinutes">
+                            @foreach (var (minutes, label) in QuietPeriods(_form.SuppressMinutes))
+                            {
+                                <option value="@minutes">@label</option>
+                            }
+                        </select>
+                    </div>
+                    @if (_form.Trigger == AlertTrigger.PerResult && _form.Condition != AlertCondition.CountLessThan)
+                    {
+                        <div class="col-sm-6 col-lg-3">
+                            <label class="form-label small" for="asupby">A repeat means the same</label>
+                            <input id="asupby" class="form-control form-control-sm dg-query" @bind="_form.SuppressBy" placeholder="e.g. src" />
+                        </div>
+                    }
+                    @if (CoverageWarning is { } warning)
+                    {
+                        <div class="col-12 small" style="color: var(--dg-sev-warning);">@warning</div>
+                    }
+                </div>
+            </section>
+
+            <section class="dg-panel mb-3">
+                <header><h2>Notify</h2></header>
+                <div class="dg-body row g-3">
+                    <div class="col-lg-6">
+                        <label class="form-label small" for="aemail">Email to</label>
+                        <input id="aemail" class="form-control form-control-sm" @bind="_form.EmailTo" placeholder="alerts@example.com, other@example.com" />
+                        @if (!_smtpReady)
+                        {
+                            <div class="form-text">Email isn't set up yet: <a href="admin/notifications">add the SMTP relay</a>.</div>
+                        }
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="form-check mt-lg-4">
+                            <input id="aticket" type="checkbox" class="form-check-input" @bind="_form.CreateTicket" />
+                            <label class="form-check-label small" for="aticket">Open an AlgaPSA ticket for the tenant's client</label>
+                        </div>
+                        @if (_form.CreateTicket && TicketWarning is { } ticketWarning)
+                        {
+                            <div class="form-text" style="color: var(--dg-sev-warning);">@ticketWarning <a href="admin/notifications">Notification settings</a></div>
+                        }
+                        else if (_form.CreateTicket)
+                        {
+                            <div class="form-text">A repeat while the ticket is still open adds a note to it instead of opening another.</div>
+                        }
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input id="aenabled" type="checkbox" class="form-check-input" @bind="_form.Enabled" />
+                            <label class="form-check-label small" for="aenabled">On</label>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            @if (_error is not null)
+            {
+                <div class="alert alert-danger small" role="alert">@_error</div>
+            }
+
+            <div class="d-flex gap-2 align-items-center flex-wrap mb-3">
+                <button class="btn btn-sm btn-primary" type="submit" disabled="@_busy">Save</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@_busy" @onclick="TestAsync">@(_testing ? "Testing…" : "Test now")</button>
+                <a class="btn btn-sm btn-link" href="alerts">Cancel</a>
+                <span class="flex-grow-1"></span>
+                @if (Id is not null)
+                {
+                    @if (_confirmDelete)
+                    {
+                        <span class="small">Delete this alert and its history?</span>
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="DeleteAsync">Delete</button>
+                        <button type="button" class="btn btn-sm btn-link" @onclick="() => _confirmDelete = false">Keep</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmDelete = true">Delete…</button>
+                    }
+                }
+            </div>
+        </form>
+
+        @if (_previews is not null)
+        {
+            <section class="dg-panel mb-3" aria-live="polite">
+                <header><h2>Test result</h2><span class="small text-body-secondary">Nothing was sent. @(_form.Kind == AlertRuleKind.Search ? $"Last {Describe(_form.TimeRange)}." : "As things are now.")</span></header>
+                <div class="dg-body">
+                    @foreach (var p in _previews)
+                    {
+                        <div class="dg-preview">
+                            <div class="d-flex gap-3 align-items-baseline flex-wrap">
+                                <strong>@p.Tenant</strong>
+                                @if (p.Error is not null)
+                                {
+                                    <span><span class="dg-dot dg-dot-bad"></span>@p.Error</span>
+                                }
+                                else if (p.Evaluation is { } e)
+                                {
+                                    <span>
+                                        @e.Count.ToString("N0", CultureInfo.InvariantCulture) @(_form.Kind != AlertRuleKind.Search ? (e.Count == 1 ? "problem" : "problems") : e.CountsEvents ? (e.Count == 1 ? "event" : "events") : (e.Count == 1 ? "row" : "rows"))
+                                    </span>
+                                    <span>
+                                        @if (e.Groups.Count == 0)
+                                        {
+                                            <span><span class="dg-dot dg-dot-off"></span>would not alert</span>
+                                        }
+                                        else
+                                        {
+                                            <span><span class="dg-dot dg-dot-warn"></span>would send @e.Groups.Count @(e.Groups.Count == 1 ? "alert" : "alerts")</span>
+                                        }
+                                    </span>
+                                    @if (e.Groups.Count > 1)
+                                    {
+                                        <span class="small text-body-secondary text-truncate" style="max-width: 40rem;">@string.Join("; ", e.Groups.Take(5).Select(g => g.Label))@(e.Groups.Count > 5 ? "; …" : "")</span>
+                                    }
+                                }
+                            </div>
+                            @if (p.Evaluation is { Sample.Count: > 0 } ev)
+                            {
+                                <div class="table-responsive mt-1">
+                                    <table class="table table-sm dg-log mb-0">
+                                        <thead><tr>@foreach (var c in ev.Columns) { <th>@c</th> }</tr></thead>
+                                        <tbody>
+                                            @foreach (var row in ev.Sample.Take(5))
+                                            {
+                                                <tr>@foreach (var v in row) { <td class="text-truncate" style="max-width: 28rem;">@AlertEvaluator.Text(v)</td> }</tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+    }
+</AdminOnly>
+
+@code {
+    [Parameter]
+    public Guid? Id { get; set; }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    private string? Q { get; set; }
+
+    [SupplyParameterFromQuery(Name = "tenant")]
+    private string? TenantParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "range")]
+    private string? RangeParam { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private AlertRuleForm _form = new();
+    private IReadOnlyList<string> _tenants = [];
+    private IReadOnlyList<TenantPsaMapping> _mappings = [];
+    private bool _psaReady;
+    private bool _smtpReady = true;
+    private string _timeZone = "UTC";
+    private TimeZoneInfo _zone = TimeZoneInfo.Utc;
+    private bool _missing;
+    private bool _busy;
+    private bool _testing;
+    private bool _confirmDelete;
+    private bool _customSchedule;
+    private string? _error;
+    private IReadOnlyList<AlertPreview>? _previews;
+
+    private static readonly (string Value, string Label)[] LookbackOptions =
+        [("5m", "5 minutes"), ("15m", "15 minutes"), ("30m", "30 minutes"), ("1h", "1 hour"), ("4h", "4 hours"), ("24h", "24 hours"), ("7d", "7 days")];
+
+    private static readonly (int Minutes, string Label)[] QuietOptions =
+        [(0, "no time (alert every run)"), (15, "15 minutes"), (60, "1 hour"), (240, "4 hours"), (1440, "24 hours"), (10080, "7 days")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _tenants = _access.Tenants;
+        var (general, smtp, psa) = await Alerts.GetSettingsAsync(_access, CancellationToken.None);
+        _timeZone = general.TimeZone;
+        _zone = general.Zone;
+        _smtpReady = smtp.IsConfigured;
+        _psaReady = psa.IsConfigured && psa.DefaultBoard is not null;
+        _mappings = await Alerts.TenantMappingsAsync(_access, CancellationToken.None);
+
+        if (Id is { } id)
+        {
+            var form = await Alerts.GetRuleAsync(_access, id, CancellationToken.None);
+            if (form is null)
+            {
+                _missing = true;
+                return;
+            }
+            _form = form;
+        }
+        else
+        {
+            _form.Query = Q ?? string.Empty;
+            _form.Tenant = TenantParam is { } t && _tenants.Contains(t) ? t : string.Empty;
+            var range = (RangeParam ?? string.Empty).TrimStart('-');
+            _form.TimeRange = LookbackOptions.Any(o => o.Value == range) ? range : "15m";
+        }
+        _customSchedule = AlertAdminService.SchedulePresets.All(p => p.Cron != _form.Schedule);
+    }
+
+    private string PresetValue => _customSchedule ? "custom" : _form.Schedule;
+
+    private void OnPreset(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? string.Empty;
+        _customSchedule = value == "custom";
+        if (!_customSchedule)
+        {
+            _form.Schedule = value;
+        }
+    }
+
+    private static IEnumerable<(string Value, string Label)> Lookbacks(string current) =>
+        LookbackOptions.Any(o => o.Value == current) ? LookbackOptions : LookbackOptions.Prepend((current, current));
+
+    private static IEnumerable<(int Minutes, string Label)> QuietPeriods(int current) =>
+        QuietOptions.Any(o => o.Minutes == current) ? QuietOptions : QuietOptions.Prepend((current, $"{current} minutes"));
+
+    private static string Describe(string range) =>
+        LookbackOptions.FirstOrDefault(o => o.Value == range).Label ?? range;
+
+    /// <summary>Warns when runs are further apart than the look-back, so events between runs would never be checked.</summary>
+    private string? CoverageWarning
+    {
+        get
+        {
+            try
+            {
+                var cron = AlertRunner.ParseSchedule(_form.Schedule);
+                var lookback = AlertEvaluator.ParseLookback(_form.TimeRange);
+                var first = cron.GetNextOccurrence(DateTimeOffset.UtcNow, _zone);
+                var second = first is null ? null : cron.GetNextOccurrence(first.Value, _zone);
+                if (first is null || second is null)
+                {
+                    return null;
+                }
+                var gap = second.Value - first.Value;
+                return lookback < gap
+                    ? $"Runs are {Span(gap)} apart but each run only looks back {Span(lookback)}, so events in between are never checked. Look back at least {Span(gap)}."
+                    : null;
+            }
+            catch (AlertRuleException ex)
+            {
+                return ex.Message;
+            }
+        }
+    }
+
+    private static string Span(TimeSpan span) =>
+        span.TotalMinutes < 60 ? $"{(int)span.TotalMinutes} min" : span.TotalHours < 48 ? $"{span.TotalHours:0.#} h" : $"{span.TotalDays:0.#} days";
+
+    private string? TicketWarning
+    {
+        get
+        {
+            if (!_psaReady)
+            {
+                return "AlgaPSA isn't set up yet (URL, API key and default board).";
+            }
+            var scope = _form.Tenant.Length > 0 ? _mappings.Where(m => m.Slug == _form.Tenant) : _mappings;
+            var unmapped = scope.Where(m => m.ClientId is null).Select(m => m.Slug).ToList();
+            return unmapped.Count == 0 ? null : $"No AlgaPSA client chosen for {string.Join(", ", unmapped)}, so their tickets would fail.";
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            await Alerts.SaveRuleAsync(_access!, _form, CancellationToken.None);
+            Nav.NavigateTo("alerts");
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        _error = null;
+        _busy = _testing = true;
+        try
+        {
+            _previews = await Alerts.PreviewAsync(_access!, _form, CancellationToken.None);
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+            _previews = null;
+        }
+        finally
+        {
+            _busy = _testing = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        try
+        {
+            await Alerts.DeleteRuleAsync(_access!, Id!.Value, CancellationToken.None);
+            Nav.NavigateTo("alerts");
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

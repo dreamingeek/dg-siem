@@ -1,0 +1,201 @@
+@page "/admin/agent-updates"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Security
+@inject AgentPackageStore Packages
+@inject AgentHealth Health
+@inject SettingsStore Settings
+@inject TenantAccess Access
+
+<PageTitle>Agent updates · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Agent updates</h1>
+    <p>Agent versions this server hands out: to new machines through the install command, and to running agents as automatic updates.</p>
+</div>
+
+<AdminOnly Access="_access">
+    <div class="row g-3">
+        <div class="col-xl-6">
+            <section class="dg-panel h-100">
+                <header><h2>Upload a version</h2></header>
+                <div class="dg-body">
+                    <p class="small">
+                        The agent package (<code>.tar.gz</code> for Linux, <code>.zip</code> for Windows) or the agent binary itself, from 0.4.0 on.
+                        The platform and version are read from the file.
+                    </p>
+                    <div class="d-flex gap-2 align-items-center flex-wrap">
+                        <InputFile id="agent-upload" class="form-control form-control-sm" style="max-width: 22rem;" OnChange="UploadAsync" disabled="@_busy" />
+                        <Status Value="@_outcome" />
+                    </div>
+                    @if (_busy)
+                    {
+                        <div class="small text-body-secondary mt-2">Uploading and checking…</div>
+                    }
+                </div>
+            </section>
+        </div>
+        <div class="col-xl-6">
+            <section class="dg-panel h-100">
+                <header><h2>Automatic updates</h2></header>
+                <div class="dg-body">
+                    <div class="form-check form-switch mb-2">
+                        <input id="auto-update" class="form-check-input" type="checkbox" role="switch" checked="@_autoUpdate" @onchange="ToggleAsync" />
+                        <label class="form-check-label" for="auto-update">Agents install the newest version for their platform</label>
+                    </div>
+                    <p class="small text-body-secondary mb-0">
+                        Agents check every 15 minutes, verify the download against this server's SHA-256 and that it runs, then restart on it.
+                        Agents older than 0.4.0 can't update themselves: run the install command from <a href="admin/agents">Agents</a> on them once.
+                        Turn this off to stage a version: new installs get it, running agents stay where they are.
+                    </p>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <section class="dg-panel mt-3">
+        <header><h2>Versions</h2></header>
+        @if (_packages.Count == 0)
+        {
+            <div class="dg-body small">Nothing uploaded yet. Until there is, install agents from a package you copy to the machine.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr><th>Platform</th><th>Version</th><th>Uploaded</th><th class="text-end">Size</th><th>SHA-256</th><th>Agents</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in _packages)
+                        {
+                            var latest = _packages.First(x => x.Platform == p.Platform) == p;
+                            var on = _agents.Count(a => a.Platform == p.Platform && a.Version == p.Version);
+                            var behind = latest ? _agents.Count(a => a.Platform == p.Platform && AgentPackageStore.IsNewer(p.Version, a.Version)) : 0;
+                            <tr>
+                                <td>@PlatformName(p.Platform)</td>
+                                <td>@p.Version @if (latest) { <span class="badge text-bg-secondary ms-1">current</span> }</td>
+                                <td class="text-nowrap" title="@p.UploadedAt.ToString("u", CultureInfo.InvariantCulture)">@AgentHealth.Ago(p.UploadedAt)@(p.UploadedBy is null ? "" : $" by {p.UploadedBy}")</td>
+                                <td class="text-end text-nowrap">@((p.BinarySize / 1024d / 1024d).ToString("0.0", CultureInfo.InvariantCulture)) MB</td>
+                                <td><code title="@p.BinarySha256">@p.BinarySha256[..12]</code></td>
+                                <td class="text-nowrap">@on on it@(behind > 0 ? $", {behind} updating" : "")</td>
+                                <td class="text-end text-nowrap">
+                                    <a class="btn btn-sm btn-link" href="@($"admin/agent-packages/{p.Platform}/{p.Version}")" download>Download</a>
+                                    @if (_confirmRemove == (p.Platform, p.Version))
+                                    {
+                                        <button type="button" class="btn btn-sm btn-danger" @onclick="() => Remove(p)">Remove @p.Version</button>
+                                        <button type="button" class="btn btn-sm btn-link" @onclick="() => _confirmRemove = null">Cancel</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmRemove = (p.Platform, p.Version)">Remove</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_agents.Any(a => a.Platform is null && a.State != AgentState.Revoked))
+            {
+                <div class="dg-body small text-body-secondary">
+                    Not updating automatically yet (older than 0.4.0): @string.Join(", ", _agents.Where(a => a.Platform is null && a.State != AgentState.Revoked).Select(a => $"{a.Tenant}/{a.Name} ({a.Version ?? "?"})")).
+                </div>
+            }
+        }
+    </section>
+    <p class="small text-body-secondary mt-3">
+        Removing a bad version stops it being handed out; agents already on it stay on it until a newer one is uploaded (agents never downgrade).
+        The three newest versions per platform are kept.
+    </p>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<AgentPackage> _packages = [];
+    private IReadOnlyList<AgentStatus> _agents = [];
+    private bool _autoUpdate = true;
+    private bool _busy;
+    private (string, string)? _confirmRemove;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _outcome;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _autoUpdate = (await Settings.GetAgentUpdatesAsync(CancellationToken.None)).AutoUpdate;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _packages = Packages.List();
+        _agents = await Health.ListAsync(_access!.Tenants, CancellationToken.None);
+    }
+
+    private async Task UploadAsync(InputFileChangeEventArgs e)
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        _outcome = null;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(maxAllowedSize: 200L * 1024 * 1024);
+            var added = await Packages.AddAsync(e.File.Name, stream, (await AuthState).User.Identity?.Name, CancellationToken.None);
+            _outcome = new(true, $"{PlatformName(added.Platform)} {added.Version} is ready" + (_autoUpdate ? "; agents will pick it up within 15 minutes." : "."));
+            await LoadAsync();
+        }
+        catch (AgentPackageException ex)
+        {
+            _outcome = new(false, ex.Message);
+        }
+        catch (IOException ex)
+        {
+            _outcome = new(false, $"Upload failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleAsync(ChangeEventArgs e)
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _autoUpdate = e.Value is true;
+        await Settings.SaveAgentUpdatesAsync(new AgentUpdateSettings(_autoUpdate), CancellationToken.None);
+    }
+
+    private async Task Remove(AgentPackage package)
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        Packages.Remove(package.Platform, package.Version);
+        _confirmRemove = null;
+        await LoadAsync();
+    }
+
+    public static string PlatformName(string platform) => platform switch
+    {
+        "linux-x64" => "Linux x64",
+        "linux-arm64" => "Linux ARM64",
+        "win-x64" => "Windows x64",
+        _ => platform,
+    };
+}

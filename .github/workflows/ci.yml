@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    # Pinned: Ubuntu 26.04's toolchain marks binaries as needing x86-64-v3 (AVX2), which older or virtualized CPUs
+    # refuse ("CPU ISA level is lower than required"). The agent must run on any x64 machine.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore DreaminGeek.Siem.slnx
+      - run: dotnet build DreaminGeek.Siem.slnx --no-restore -c Release
+      - run: dotnet test DreaminGeek.Siem.slnx --no-build -c Release
+      - name: Publish Native AOT agent (linux-x64)
+        run: |
+          dotnet publish src/DreaminGeek.Siem.Agent -c Release -r linux-x64 -o out
+          mkdir pkg && cp out/dg-siem-agent deploy/agent/install.sh deploy/agent/*.service deploy/agent/*.path LICENSE pkg/
+          tar -czf dg-siem-agent-linux-x64.tar.gz -C pkg .
+      - name: Agent runs on baseline x86-64
+        run: |
+          readelf -n out/dg-siem-agent | tee /dev/stderr | grep -q "x86 ISA needed: x86-64-baseline$" \
+            || { echo "::error::The agent requires more than baseline x86-64; it won't start on older CPUs"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dg-siem-agent-linux-x64
+          path: dg-siem-agent-linux-x64.tar.gz
+
+  windows-agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Event log tests (real event logs; the runner is Administrator)
+        run: dotnet test tests/DreaminGeek.Siem.Tests -c Release --filter "Category=Windows" --logger "console;verbosity=normal"
+      - name: Publish Native AOT agent (win-x64)
+        run: dotnet publish src/DreaminGeek.Siem.Agent -c Release -r win-x64 -o out
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item out/dg-siem-agent.exe, deploy/agent/install.ps1, LICENSE pkg/
+          Compress-Archive -Path pkg/* -DestinationPath dg-siem-agent-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dg-siem-agent-win-x64
+          path: dg-siem-agent-win-x64.zip
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build-test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/DreaminGeek.Siem.Web/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/dreamingeek/dg-siem-server:latest,ghcr.io/dreamingeek/dg-siem-server:${{ github.sha }}

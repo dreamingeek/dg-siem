@@ -1,0 +1,97 @@
+@page "/admin/features"
+@rendermode InteractiveServer
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Ingest.ThreatIntel
+@using DreaminGeek.Siem.Web.Security
+@using DreaminGeek.Siem.Web.ThreatIntel
+@using DreaminGeek.Siem.Web.Components.Widgets
+@inject DreaminGeek.Siem.Web.Features.FeatureState Features
+@inject ThreatIntelService ThreatIntel
+@inject TenantAccess Access
+@inject NavigationManager Nav
+
+<PageTitle>Features · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Features</h1>
+    <p>Optional parts of DG SIEM. A part that's off does nothing in the background and stays out of the menu, so DG SIEM can be a plain log collector.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_features is { } f)
+    {
+        <section class="dg-panel dg-feature" style="max-width: 56rem;">
+            <div class="dg-body">
+                <div class="d-flex align-items-start gap-3">
+                    <div class="form-check form-switch m-0 pt-1">
+                        <input id="ti" class="form-check-input" type="checkbox" role="switch" checked="@f.ThreatIntel" disabled="@_busy"
+                               @onchange="e => SetThreatIntelAsync(e.Value is true)" aria-describedby="ti-about" />
+                    </div>
+                    <div class="flex-grow-1">
+                        <label for="ti" class="h6 mb-1 d-block">Threat intel</label>
+                        <div id="ti-about" class="small">
+                            <p class="mb-2">
+                                Downloads public lists of known-bad addresses (botnet controllers, criminal networks) and marks every event to or from one,
+                                so you can search for them (<code>threat_feed=*</code>) and alert on them. You can keep your own list too.
+                            </p>
+                            <p class="mb-2 text-body-secondary">
+                                When it's on, the server connects to each feed you switch on, on its schedule:
+                                @string.Join(", ", ThreatFeeds.BuiltIn.Where(b => b.OnByDefault).Select(b => new Uri(b.Url).Host).Distinct()) to start with.
+                                Each install downloads the lists directly from their publishers, under their terms. When it's off, nothing is downloaded and events aren't marked.
+                            </p>
+                            @if (f.ThreatIntel)
+                            {
+                                <a href="admin/threat-intel">Choose feeds and keep your own list</a>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <Status Value="@_outcome" />
+            </div>
+        </section>
+        <p class="small text-body-secondary mt-3" style="max-width: 56rem;">
+            Sigma rules and cases will be switched on here too when they arrive.
+        </p>
+    }
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    [SupplyParameterFromQuery(Name = "saved")]
+    private string? Saved { get; set; }
+
+    private UserAccess? _access;
+    private FeatureSettings? _features;
+    private bool _busy;
+    private Outcome? _outcome;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _features = await Features.GetAsync(CancellationToken.None);
+        _outcome = Saved switch
+        {
+            "threat-intel-on" => new(true, "Threat intel is on. The first downloads start within a minute; new events are marked from then on."),
+            "threat-intel-off" => new(true, "Threat intel is off. Nothing more is downloaded, and new events aren't marked. Events marked earlier keep their marks."),
+            _ => null,
+        };
+    }
+
+    private async Task SetThreatIntelAsync(bool on)
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        await ThreatIntel.SetEnabledAsync(on, CancellationToken.None);
+        // Reload, so the menu shows (or drops) Threat intel.
+        Nav.NavigateTo($"admin/features?saved=threat-intel-{(on ? "on" : "off")}", forceLoad: true);
+    }
+}

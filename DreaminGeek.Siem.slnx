@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DreaminGeek.Siem.Agent/DreaminGeek.Siem.Agent.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Alerting/DreaminGeek.Siem.Alerting.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Core/DreaminGeek.Siem.Core.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Data/DreaminGeek.Siem.Data.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Ingest/DreaminGeek.Siem.Ingest.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Parsers/DreaminGeek.Siem.Parsers.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Query/DreaminGeek.Siem.Query.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Storage.ClickHouse/DreaminGeek.Siem.Storage.ClickHouse.csproj" />
+    <Project Path="src/DreaminGeek.Siem.Web/DreaminGeek.Siem.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DreaminGeek.Siem.Tests/DreaminGeek.Siem.Tests.csproj" />
+  </Folder>
+</Solution>

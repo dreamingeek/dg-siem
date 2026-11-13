@@ -1,0 +1,64 @@
+@page "/account/login-recovery"
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Security
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@attribute [AllowAnonymous]
+@layout DreaminGeek.Siem.Web.Components.Layout.EmptyLayout
+@inject SignInManager<SiemUser> SignIn
+@inject NavigationManager Nav
+
+<PageTitle>Recovery code · DG SIEM</PageTitle>
+
+<AuthCard Title="Use a recovery code" Error="@_error">
+    <p class="small text-body-secondary">Enter one of the recovery codes you saved when you set up two-factor. Each code works once.</p>
+    <EditForm Model="Input!" method="post" OnSubmit="VerifyAsync" FormName="login-recovery">
+        <div class="mb-3">
+            <label for="rcode" class="form-label">Recovery code</label>
+            <InputText id="rcode" class="form-control dg-otp" @bind-Value="Input!.Code" autocomplete="off" autofocus />
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Sign in</button>
+    </EditForm>
+    <p class="small mt-4 mb-0">
+        <a href="@($"/account/login-2fa{ReturnUrls.Query(ReturnUrl)}")">Back to the authenticator code</a>.
+        No codes left? An admin can reset your two-factor on the Users page.
+    </p>
+</AuthCard>
+
+@code {
+    [SupplyParameterFromForm]
+    private CodeInput? Input { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Input ??= new CodeInput();
+        if (await SignIn.GetTwoFactorAuthenticationUserAsync() is null)
+        {
+            Nav.NavigateTo($"/account/login{ReturnUrls.Query(ReturnUrl)}", forceLoad: true);
+        }
+    }
+
+    private async Task VerifyAsync()
+    {
+        var code = TwoFactor.CleanRecoveryCode(Input!.Code);
+        var result = code.Length == 0 ? SignInResult.Failed : await SignIn.TwoFactorRecoveryCodeSignInAsync(code);
+        if (result.Succeeded)
+        {
+            // Send them to set up their authenticator again if they've lost it.
+            Nav.NavigateTo("/account/security?recovered=1", forceLoad: true);
+            return;
+        }
+        _error = result.IsLockedOut ? "Too many attempts. Try again in 15 minutes." : "That recovery code isn't valid or was already used.";
+        Input.Code = string.Empty;
+    }
+
+    private sealed class CodeInput
+    {
+        public string Code { get; set; } = string.Empty;
+    }
+}

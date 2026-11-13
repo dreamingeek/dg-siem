@@ -1,0 +1,345 @@
+@page "/account/security"
+@rendermode InteractiveServer
+@using System.ComponentModel.DataAnnotations
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Security
+@using Microsoft.AspNetCore.Identity
+@inject UserManager<SiemUser> Users
+@inject SettingsStore Settings
+@inject TwoFactorPolicy Policy
+@inject NavigationManager Nav
+
+<PageTitle>Your account · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Your account</h1>
+    <p>@_user?.Email</p>
+</div>
+
+@if (Required == "1" && !_enabled)
+{
+    <div class="alert alert-warning small" role="alert">Two-factor sign-in is required for everyone. Set it up below to continue using DG SIEM.</div>
+}
+@if (Recovered == "1" && _enabled)
+{
+    <div class="alert alert-warning small" role="status">
+        You signed in with a recovery code; @_recoveryLeft left. If you've lost your phone, choose <strong>Move to a new phone</strong> below.
+    </div>
+}
+
+<div class="row g-3">
+    <div class="col-xl-7">
+        <section class="dg-panel h-100">
+            <header>
+                <h2>Two-factor sign-in</h2>
+                <span class="small">
+                    @if (_enabled)
+                    {
+                        <span><span class="dg-dot dg-dot-ok"></span>On</span>
+                    }
+                    else
+                    {
+                        <span><span class="dg-dot dg-dot-off"></span>Off</span>
+                    }
+                </span>
+            </header>
+            <div class="dg-body">
+                @if (_error is not null)
+                {
+                    <div class="alert alert-danger small" role="alert">@_error</div>
+                }
+
+                @if (_newCodes is not null)
+                {
+                    <p class="small"><strong>Save these recovery codes</strong> somewhere safe, such as your password manager. Each one signs you in once if you lose your phone. They won't be shown again.</p>
+                    <div class="dg-codes mb-3" aria-label="Recovery codes">
+                        @foreach (var recoveryCode in _newCodes)
+                        {
+                            <span>@recoveryCode</span>
+                        }
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(this.closest('.dg-body').querySelector('.dg-codes').innerText.split(/\s+/).join('\n')); this.textContent='Copied';">Copy codes</button>
+                        <button type="button" class="btn btn-sm btn-primary" @onclick="DoneWithCodes">I've saved them</button>
+                    </div>
+                }
+                else if (_setupKey is not null)
+                {
+                    <ol class="small ps-3 mb-3">
+                        <li>In your authenticator app (Microsoft Authenticator, Google Authenticator, Bitwarden, 1Password…), add an account and scan this code.</li>
+                        <li>Enter the 6-digit code the app shows.</li>
+                    </ol>
+                    <div class="d-flex gap-4 flex-wrap align-items-start">
+                        <div class="dg-qr" role="img" aria-label="QR code for your authenticator app">@((MarkupString)_qrSvg!)</div>
+                        <div style="min-width: 14rem; flex: 1;">
+                            <p class="small text-body-secondary mb-1">Can't scan? Enter this key:</p>
+                            <p class="dg-key mb-3">@TwoFactor.FormatKey(_setupKey)</p>
+                            <form @onsubmit="VerifySetupAsync" @onsubmit:preventDefault>
+                                <label class="form-label small" for="setupcode">Code from the app</label>
+                                <input id="setupcode" class="form-control dg-otp mb-2" style="max-width: 12rem;" @bind="_setupCode" autocomplete="one-time-code" inputmode="numeric" maxlength="7" />
+                                <div class="d-flex gap-2">
+                                    <button type="submit" class="btn btn-sm btn-primary" disabled="@_busy">Turn on</button>
+                                    @if (!_mustSetUp)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link" @onclick="CancelSetup">Cancel</button>
+                                    }
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                }
+                else if (_enabled)
+                {
+                    <p class="small mb-2">Signing in asks for a code from your authenticator app after your password.</p>
+                    <p class="small mb-3">
+                        Recovery codes left: <strong>@_recoveryLeft</strong>
+                        @if (_recoveryLeft <= 3)
+                        {
+                            <span style="color: var(--dg-sev-warning);"> (running low; make new ones)</span>
+                        }
+                    </p>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="NewCodesAsync">New recovery codes</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="MoveToNewPhoneAsync">Move to a new phone</button>
+                        @if (_policyRequires)
+                        {
+                            <span class="small text-body-secondary align-self-center">Two-factor is required for everyone, so it can't be turned off.</span>
+                        }
+                        else if (_confirmOff)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="TurnOffAsync">Turn off two-factor</button>
+                            <button type="button" class="btn btn-sm btn-link" @onclick="() => _confirmOff = false">Keep it on</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmOff = true">Turn off…</button>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p class="small">Protect your account with a code from an authenticator app on your phone, as well as your password.</p>
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@_busy" @onclick="StartSetupAsync">Set up authenticator app</button>
+                }
+            </div>
+        </section>
+    </div>
+
+    <div class="col-xl-5">
+        <section class="dg-panel h-100">
+            <header><h2>Password</h2></header>
+            <div class="dg-body">
+                @if (_passwordStatus is { } status)
+                {
+                    <div class="alert @(status.Ok ? "alert-success" : "alert-danger") small" role="status">@status.Message</div>
+                }
+                <form @onsubmit="ChangePasswordAsync" @onsubmit:preventDefault autocomplete="off">
+                    <label class="form-label small" for="pwcur">Current password</label>
+                    <input id="pwcur" type="password" class="form-control form-control-sm mb-2" @bind="_currentPassword" autocomplete="current-password" />
+                    <label class="form-label small" for="pwnew">New password <span class="text-body-secondary">(12+ characters)</span></label>
+                    <input id="pwnew" type="password" class="form-control form-control-sm mb-2" @bind="_newPassword" autocomplete="new-password" />
+                    <label class="form-label small" for="pwconf">New password again</label>
+                    <input id="pwconf" type="password" class="form-control form-control-sm mb-3" @bind="_confirmPassword" autocomplete="new-password" />
+                    <button type="submit" class="btn btn-sm btn-primary" disabled="@_busy">Change password</button>
+                    <p class="small text-body-secondary mt-2 mb-0">Changing it signs you out of other browsers.</p>
+                </form>
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "required")]
+    private string? Required { get; set; }
+
+    [SupplyParameterFromQuery(Name = "recovered")]
+    private string? Recovered { get; set; }
+
+    [SupplyParameterFromQuery(Name = "password")]
+    private string? PasswordChanged { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private SiemUser? _user;
+    private bool _enabled;
+    private bool _policyRequires;
+    private int _recoveryLeft;
+    private bool _busy;
+    private bool _confirmOff;
+    private string? _error;
+
+    private string? _setupKey;
+    private string? _qrSvg;
+    private string _setupCode = string.Empty;
+    private bool _mustSetUp;
+    private IReadOnlyList<string>? _newCodes;
+
+    private string _currentPassword = string.Empty;
+    private string _newPassword = string.Empty;
+    private string _confirmPassword = string.Empty;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _passwordStatus;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _user = await Users.GetUserAsync((await AuthState).User);
+        if (PasswordChanged == "1")
+        {
+            _passwordStatus = new(true, "Password changed. Other browsers have been signed out.");
+        }
+        _policyRequires = (await Settings.GetGeneralAsync(CancellationToken.None)).RequireTwoFactor;
+        await RefreshStatusAsync();
+        _mustSetUp = _policyRequires && !_enabled;
+        if (_mustSetUp)
+        {
+            await StartSetupAsync();
+        }
+    }
+
+    private async Task RefreshStatusAsync()
+    {
+        if (_user is null)
+        {
+            return;
+        }
+        _user = await Users.FindByIdAsync(_user.Id.ToString());
+        _enabled = _user is not null && await Users.GetTwoFactorEnabledAsync(_user);
+        _recoveryLeft = _user is null ? 0 : await Users.CountRecoveryCodesAsync(_user);
+    }
+
+    private async Task StartSetupAsync()
+    {
+        if (_user is null)
+        {
+            return;
+        }
+        _error = null;
+        // Reuse a key from an unfinished setup so a half-scanned phone still works; otherwise make one.
+        var key = _enabled ? null : await Users.GetAuthenticatorKeyAsync(_user);
+        if (string.IsNullOrEmpty(key))
+        {
+            await Users.ResetAuthenticatorKeyAsync(_user);
+            key = await Users.GetAuthenticatorKeyAsync(_user);
+        }
+        _setupKey = key;
+        _qrSvg = TwoFactor.QrSvg(TwoFactor.OtpAuthUri(_user.Email ?? _user.UserName ?? "user", key!));
+        _setupCode = string.Empty;
+    }
+
+    private async Task VerifySetupAsync()
+    {
+        if (_user is null || _setupKey is null)
+        {
+            return;
+        }
+        _busy = true;
+        _error = null;
+        try
+        {
+            var code = TwoFactor.CleanCode(_setupCode);
+            if (!await Users.VerifyTwoFactorTokenAsync(_user, Users.Options.Tokens.AuthenticatorTokenProvider, code))
+            {
+                _error = "That code didn't match. Check the app shows DG SIEM and try the current code.";
+                return;
+            }
+            await Users.SetTwoFactorEnabledAsync(_user, true);
+            _newCodes = (await Users.GenerateNewTwoFactorRecoveryCodesAsync(_user, TwoFactor.RecoveryCodeCount))?.ToList();
+            _setupKey = _qrSvg = null;
+            Policy.Forget(_user.Id);
+            await RefreshStatusAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CancelSetup()
+    {
+        _setupKey = _qrSvg = null;
+        _error = null;
+    }
+
+    private async Task NewCodesAsync()
+    {
+        if (_user is null)
+        {
+            return;
+        }
+        _busy = true;
+        _newCodes = (await Users.GenerateNewTwoFactorRecoveryCodesAsync(_user, TwoFactor.RecoveryCodeCount))?.ToList();
+        await RefreshStatusAsync();
+        _busy = false;
+    }
+
+    /// <summary>New key for a new phone; the old app stops working once this is shown.</summary>
+    private async Task MoveToNewPhoneAsync()
+    {
+        if (_user is null)
+        {
+            return;
+        }
+        _busy = true;
+        await Users.ResetAuthenticatorKeyAsync(_user);
+        var key = await Users.GetAuthenticatorKeyAsync(_user);
+        _setupKey = key;
+        _qrSvg = TwoFactor.QrSvg(TwoFactor.OtpAuthUri(_user.Email ?? _user.UserName ?? "user", key!));
+        _setupCode = string.Empty;
+        _mustSetUp = true; // the old app no longer works, so finish here
+        _busy = false;
+    }
+
+    private async Task TurnOffAsync()
+    {
+        if (_user is null || _policyRequires)
+        {
+            return;
+        }
+        _busy = true;
+        await Users.SetTwoFactorEnabledAsync(_user, false);
+        await Users.ResetAuthenticatorKeyAsync(_user);
+        _confirmOff = false;
+        Policy.Forget(_user.Id);
+        await RefreshStatusAsync();
+        _busy = false;
+        // Two-factor changes update the account's security stamp; re-issue this browser's sign-in.
+        Nav.NavigateTo("/account/refresh?returnUrl=%2Faccount%2Fsecurity", forceLoad: true);
+    }
+
+    private void DoneWithCodes()
+    {
+        _newCodes = null;
+        _mustSetUp = false;
+        Nav.NavigateTo("/account/refresh?returnUrl=%2Faccount%2Fsecurity", forceLoad: true);
+    }
+
+    private async Task ChangePasswordAsync()
+    {
+        if (_user is null)
+        {
+            return;
+        }
+        if (_newPassword != _confirmPassword)
+        {
+            _passwordStatus = new(false, "The new passwords don't match.");
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var result = await Users.ChangePasswordAsync(_user, _currentPassword, _newPassword);
+            if (!result.Succeeded)
+            {
+                _passwordStatus = new(false, string.Join(" ", result.Errors.Select(e => e.Code == "PasswordMismatch" ? "The current password is wrong." : e.Description)));
+                return;
+            }
+            _currentPassword = _newPassword = _confirmPassword = string.Empty;
+            Nav.NavigateTo("/account/refresh?returnUrl=%2Faccount%2Fsecurity%3Fpassword%3D1", forceLoad: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

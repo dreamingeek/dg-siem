@@ -1,0 +1,225 @@
+@page "/admin/geoip"
+@rendermode InteractiveServer
+@using System.Globalization
+@using System.Net
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Ingest.GeoIp
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.GeoIp
+@using DreaminGeek.Siem.Web.Security
+@inject GeoIpUpdater Updater
+@inject GeoIpEnricher Enricher
+@inject SettingsStore Settings
+@inject TenantAccess Access
+
+<PageTitle>GeoIP · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>GeoIP</h1>
+    <p>Adds country, city and network (ASN) to public source and destination addresses as events arrive.</p>
+</div>
+
+<AdminOnly Access="_access">
+    <div class="row g-3">
+        <div class="col-xl-6">
+            <section class="dg-panel h-100">
+                <header><h2>Database</h2></header>
+                <div class="dg-body">
+                    <form @onsubmit="SaveAsync" @onsubmit:preventDefault>
+                        <fieldset class="mb-3">
+                            <legend class="form-label small">Source</legend>
+                            @foreach (var (value, label, help) in Providers)
+                            {
+                                <div class="form-check mb-1">
+                                    <input class="form-check-input" type="radio" name="provider" id="@($"gp{value}")" checked="@(_provider == value)" @onchange="() => _provider = value" />
+                                    <label class="form-check-label" for="@($"gp{value}")">@label</label>
+                                    <div class="small text-body-secondary">@help</div>
+                                </div>
+                            }
+                        </fieldset>
+                        @if (_provider == GeoIpProvider.MaxMind)
+                        {
+                            <div class="row g-2 mb-3">
+                                <div class="col-sm-5">
+                                    <label class="form-label small" for="mmacct">MaxMind account ID</label>
+                                    <input id="mmacct" class="form-control form-control-sm" @bind="_accountId" autocomplete="off" />
+                                </div>
+                                <div class="col-sm-7">
+                                    <label class="form-label small" for="mmkey">License key</label>
+                                    <input id="mmkey" type="password" class="form-control form-control-sm" @bind="_licenseKey" autocomplete="new-password"
+                                           placeholder="@(_hasKey ? "Saved; leave blank to keep" : "From maxmind.com → Manage license keys")" />
+                                </div>
+                            </div>
+                        }
+                        @if (_provider == GeoIpProvider.LocalFiles)
+                        {
+                            <p class="small">Copy <code>@GeoIpUpdater.CityFile</code> and/or <code>@GeoIpUpdater.AsnFile</code> (MMDB format) into <code>@Updater.Directory</code> on the server. Replacing them is picked up within 6 hours, or straight away with <strong>Update now</strong>.</p>
+                        }
+                        <div class="form-check mb-3">
+                            <input id="gpdst" type="checkbox" class="form-check-input" @bind="_enrichDestination" />
+                            <label class="form-check-label small" for="gpdst">Also look up destination addresses (outbound traffic)</label>
+                        </div>
+                        <div class="d-flex gap-2 align-items-center flex-wrap">
+                            <button class="btn btn-sm btn-primary" type="submit" disabled="@_busy">@(_busy ? "Working…" : "Save and update")</button>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@_busy" @onclick="UpdateNowAsync">Update now</button>
+                            <Status Value="@_outcome" />
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </div>
+
+        <div class="col-xl-6">
+            <section class="dg-panel h-100">
+                <header><h2>Status</h2></header>
+                <div class="dg-body">
+                    @{ var s = Updater.Status; }
+                    <dl class="dg-facts">
+                        <dt>Source</dt>
+                        <dd>@Providers.First(p => p.Value == s.Provider).Label</dd>
+                        @foreach (var db in s.Databases)
+                        {
+                            <dt>@(db.Kind == "asn" ? "Network (ASN)" : "Location")</dt>
+                            <dd>@db.DatabaseType, built @db.BuildDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</dd>
+                        }
+                        @if (s.Databases.Count == 0)
+                        {
+                            <dt>Databases</dt>
+                            <dd>None loaded@(s.Provider == GeoIpProvider.Off ? " (turned off)" : "")</dd>
+                        }
+                        <dt>Last check</dt>
+                        <dd>@(s.LastCheck is null ? "not yet" : AgentHealth.Ago(s.LastCheck))@(s.LastUpdate is null ? "" : $"; last updated {AgentHealth.Ago(s.LastUpdate)}")</dd>
+                        <dt>Since start</dt>
+                        <dd>@s.Enriched.ToString("N0", CultureInfo.InvariantCulture) events enriched, @s.Lookups.ToString("N0", CultureInfo.InvariantCulture) distinct lookups</dd>
+                        @if (s.LastError is not null)
+                        {
+                            <dt>Problem</dt>
+                            <dd class="dg-status-bad">@s.LastError</dd>
+                        }
+                    </dl>
+
+                    <form class="d-flex gap-2 align-items-end flex-wrap mt-3" @onsubmit="Lookup" @onsubmit:preventDefault>
+                        <div>
+                            <label class="form-label small" for="gpip">Look up an address</label>
+                            <input id="gpip" class="form-control form-control-sm dg-query" style="width: 16rem;" @bind="_testIp" placeholder="8.8.8.8" />
+                        </div>
+                        <button class="btn btn-sm btn-outline-secondary" type="submit">Look up</button>
+                    </form>
+                    @if (_testResult is not null)
+                    {
+                        <p class="small mt-2 mb-0">@_testResult</p>
+                    }
+                </div>
+            </section>
+        </div>
+    </div>
+    <p class="small text-body-secondary mt-3">
+        Only events that arrive after GeoIP is set up are enriched. Private, CGNAT (e.g. Pangolin tunnels) and other reserved addresses are skipped,
+        and locations that a parser already supplies (CrowdSec, authentik) are kept.
+        Search with <code>country=CN</code>, <code>asn=7018</code> or <code>org="Hetzner*"</code>, or chart <code>| stats count() by country</code>.
+    </p>
+    @if (_provider == GeoIpProvider.DbIpLite)
+    {
+        <p class="small text-body-secondary">
+            <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a>, licensed under
+            <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.
+        </p>
+    }
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private static readonly (GeoIpProvider Value, string Label, string Help)[] Providers =
+    [
+        (GeoIpProvider.DbIpLite, "DB-IP Lite", "Free, no account. Updated monthly. Maps credit DB-IP, as its license requires."),
+        (GeoIpProvider.MaxMind, "MaxMind GeoLite2", "Free account and license key at maxmind.com. Updated weekly."),
+        (GeoIpProvider.LocalFiles, "My own files", "MMDB files you copy to the server, e.g. a commercial GeoIP2 database."),
+        (GeoIpProvider.Off, "Off", "No lookups."),
+    ];
+
+    private UserAccess? _access;
+    private GeoIpProvider _provider;
+    private string _accountId = string.Empty;
+    private string _licenseKey = string.Empty;
+    private bool _hasKey;
+    private bool _enrichDestination = true;
+    private bool _busy;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _outcome;
+    private string _testIp = string.Empty;
+    private string? _testResult;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        var config = await Settings.GetGeoIpAsync(CancellationToken.None);
+        _provider = config.Provider;
+        _accountId = config.MaxMindAccountId ?? string.Empty;
+        _hasKey = !string.IsNullOrEmpty(config.MaxMindLicenseKey);
+        _enrichDestination = config.EnrichDestination;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        await Settings.SaveGeoIpAsync(new GeoIpSettings(_provider, _accountId, _licenseKey.Length > 0 ? _licenseKey : null, _enrichDestination), CancellationToken.None);
+        _hasKey = _hasKey || _licenseKey.Length > 0;
+        _licenseKey = string.Empty;
+        await UpdateNowAsync();
+    }
+
+    private async Task UpdateNowAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        _outcome = null;
+        StateHasChanged();
+        try
+        {
+            await Updater.RefreshAsync(force: true, CancellationToken.None);
+            var status = Updater.Status;
+            _outcome = status.LastError is { } error ? new(false, error)
+                : status.Provider == GeoIpProvider.Off ? new(true, "GeoIP is off.")
+                : new(true, $"Up to date: {string.Join(", ", status.Databases.Select(d => d.DatabaseType))}.");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Lookup()
+    {
+        var text = _testIp.Trim();
+        if (!IPAddress.TryParse(text, out var address))
+        {
+            _testResult = "That isn't an IP address.";
+            return;
+        }
+        if (!IpRanges.IsPublic(address))
+        {
+            _testResult = $"{text} is a private or reserved address, so it isn't looked up.";
+            return;
+        }
+        var r = Enricher.Lookup(address);
+        _testResult = r is null
+            ? (Enricher.IsLoaded ? $"{text} isn't in the database." : "No database is loaded yet.")
+            : string.Join(", ", new[]
+              {
+                  string.Join(", ", new[] { r.City, r.Region, r.CountryName }.Where(x => x is not null)),
+                  r.CountryCode is null ? null : $"({r.CountryCode})",
+                  r.AsNumber is null ? null : $"AS{r.AsNumber} {r.AsOrganization}".Trim(),
+              }.Where(x => !string.IsNullOrEmpty(x)));
+    }
+}

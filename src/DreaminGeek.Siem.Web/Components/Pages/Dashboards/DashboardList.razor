@@ -1,0 +1,148 @@
+@page "/dashboards"
+@rendermode InteractiveServer
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Dashboards
+@using DreaminGeek.Siem.Web.Security
+@inject DashboardService Dashboards
+@inject TenantAccess Access
+@inject NavigationManager Nav
+
+<PageTitle>Dashboards · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Dashboards</h1>
+    <p>Panels built from searches, refreshed on demand or on a timer.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+
+    <section class="dg-panel mb-3">
+        <div class="dg-body">
+            <form class="d-flex gap-2 align-items-end flex-wrap" @onsubmit="CreateAsync" @onsubmit:preventDefault>
+                <div>
+                    <label class="form-label small" for="dname">New dashboard</label>
+                    <input id="dname" class="form-control form-control-sm" style="min-width: 18rem;" @bind="_name" placeholder="Acme overview" maxlength="120" />
+                </div>
+                <button class="btn btn-sm btn-primary" type="submit">Create</button>
+                @if (_missingStarters > 0)
+                {
+                    <span class="flex-grow-1"></span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="StartersAsync">
+                        Add @(_missingStarters == StarterDashboards.All.Count ? "the starter dashboards" : $"{_missingStarters} missing starter dashboard{(_missingStarters == 1 ? "" : "s")}")
+                    </button>
+                }
+            </form>
+        </div>
+    </section>
+
+    <section class="dg-panel">
+        <div class="table-responsive">
+            <table class="table">
+                <thead><tr><th>Dashboard</th><th class="num">Panels</th><th>Updated</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var d in _dashboards)
+                    {
+                        <tr>
+                            <td>
+                                <a href="@($"dashboards/{d.Id}")">@d.Name</a>
+                                @if (!string.IsNullOrEmpty(d.Description))
+                                {
+                                    <div class="small text-body-secondary">@d.Description</div>
+                                }
+                            </td>
+                            <td class="num">@d.Panels</td>
+                            <td class="text-nowrap">@AgentHealth.Ago(d.UpdatedAt)</td>
+                            <td class="text-end text-nowrap">
+                                <button type="button" class="btn btn-sm btn-link" @onclick="() => DuplicateAsync(d)">Duplicate</button>
+                                @if (_confirmDelete == d.Id)
+                                {
+                                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(d)">Confirm delete</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmDelete = d.Id">Delete</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (_dashboards.Count == 0 && _loaded)
+                    {
+                        <tr><td colspan="4" class="text-body-secondary">No dashboards yet. Add the starter set (security, Pangolin traffic, UniFi firewall) or create your own.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<DashboardSummary> _dashboards = [];
+    private int _missingStarters;
+    private bool _loaded;
+    private bool _busy;
+    private string _name = string.Empty;
+    private string? _error;
+    private Guid? _confirmDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _dashboards = await Dashboards.ListAsync(_access, CancellationToken.None);
+        var names = _dashboards.Select(d => d.Name).ToHashSet(StringComparer.Ordinal);
+        _missingStarters = StarterDashboards.All.Count(s => !names.Contains(s.Name));
+        _loaded = true;
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            await action();
+            await LoadAsync();
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task CreateAsync() => Run(async () =>
+    {
+        var id = await Dashboards.CreateAsync(_access!, _name, null, null, "-24h", CancellationToken.None);
+        Nav.NavigateTo($"dashboards/{id}?edit=1");
+    });
+
+    private Task StartersAsync() => Run(() => Dashboards.CreateStartersAsync(_access!, CancellationToken.None));
+
+    private Task DuplicateAsync(DashboardSummary d) => Run(() => Dashboards.DuplicateAsync(_access!, d.Id, CancellationToken.None));
+
+    private Task DeleteAsync(DashboardSummary d) => Run(async () =>
+    {
+        await Dashboards.DeleteAsync(_access!, d.Id, CancellationToken.None);
+        _confirmDelete = null;
+    });
+}

@@ -1,0 +1,11 @@
+# Automatic updates: the agent (unprivileged) creates update/requested when the server has a newer version.
+# This starts dg-siem-agent-update.service, which downloads, verifies and installs it as root.
+[Unit]
+Description=Watch for DG SIEM agent update requests
+
+[Path]
+PathExists=/var/lib/dg-siem-agent/update/requested
+Unit=dg-siem-agent-update.service
+
+[Install]
+WantedBy=multi-user.target

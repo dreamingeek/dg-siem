@@ -1,0 +1,286 @@
+@page "/alerts"
+@rendermode InteractiveServer
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Alerts
+@using DreaminGeek.Siem.Web.Security
+@inject AlertAdminService Alerts
+@inject TenantAccess Access
+@inject DreaminGeek.Siem.Web.Features.FeatureState Features
+
+<PageTitle>Alerts · DG SIEM</PageTitle>
+
+<div class="dg-page-head d-flex align-items-end justify-content-between gap-3 flex-wrap">
+    <div>
+        <h1>Alerts</h1>
+        <p>Searches that run on a schedule and email you or open a ticket when they match.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="alerts/history">History</a>
+        @if (_access?.IsGlobalAdmin == true)
+        {
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="OpenPack">Add ready-made alerts</button>
+        }
+        <a class="btn btn-sm btn-primary" href="alerts/new">New alert</a>
+    </div>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+    @if (_notice is not null)
+    {
+        <div class="alert alert-success small" role="status">@_notice</div>
+    }
+
+    @if (_packOpen)
+    {
+        <section class="dg-panel mb-3">
+            <header><h2>Add ready-made alerts</h2></header>
+            <div class="dg-body">
+                <p class="small">
+                    Ready-made alerts for Windows, Defender, the phone systems and authentik. Each runs for every tenant separately,
+                    emails <strong>@(_email ?? "nobody (your login has no email address)")</strong>, and opens an AlgaPSA ticket when it's High or Critical.
+                    They start switched on; edit, test or turn any of them off afterwards.
+                </p>
+                @foreach (var group in _templates.GroupBy(t => t.Group))
+                {
+                    <fieldset class="mb-3">
+                        <legend class="form-label small fw-semibold mb-1">@group.Key</legend>
+                        @foreach (var t in group)
+                        {
+                            var added = _existing.Contains(t.Name);
+                            var id = $"pack-{_templates.IndexOf(t)}";
+                            <div class="form-check mb-1">
+                                <input class="form-check-input" type="checkbox" id="@id" disabled="@added" checked="@(added || _picked.Contains(t.Name))"
+                                       @onchange="e => Pick(t.Name, e.Value is true)" />
+                                <label class="form-check-label small" for="@id">
+                                    @t.Name <span class="@AlertUi.SeverityClass(t.Severity)">@t.Severity</span>
+                                    @if (added)
+                                    {
+                                        <span class="text-body-secondary"> (already added)</span>
+                                    }
+                                    <div class="text-body-secondary">@t.Description</div>
+                                </label>
+                            </div>
+                        }
+                    </fieldset>
+                }
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@(_picked.Count == 0 || _adding)" @onclick="AddPackAsync">
+                        @(_adding ? "Adding…" : $"Add {_picked.Count} alert{(_picked.Count == 1 ? "" : "s")}")
+                    </button>
+                    <button type="button" class="btn btn-sm btn-link" @onclick="() => _packOpen = false">Cancel</button>
+                </div>
+            </div>
+        </section>
+    }
+
+    <section class="dg-panel">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr><th>Alert</th><th>Severity</th><th>Tenant</th><th>Runs</th><th>Notifies</th><th>Last run</th><th>Last fired</th><th class="num">7 days</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _rules)
+                    {
+                        <tr class="@(r.Enabled ? "" : "text-body-secondary")">
+                            <td>
+                                <a href="@($"alerts/{r.Id}")">@r.Name</a>
+                                @if (!r.Enabled)
+                                {
+                                    <span class="small"> (off)</span>
+                                }
+                                @if (!string.IsNullOrEmpty(r.Description))
+                                {
+                                    <div class="small text-body-secondary">@r.Description</div>
+                                }
+                            </td>
+                            <td><span class="@AlertUi.SeverityClass(r.Severity)">@r.Severity</span></td>
+                            <td>@(r.Tenant ?? "each tenant")</td>
+                            <td class="text-nowrap">
+                                @r.Schedule
+                                @if (r.Enabled)
+                                {
+                                    <div class="small text-body-secondary">next @AlertUi.Until(r.NextRun)</div>
+                                }
+                            </td>
+                            <td class="text-nowrap">@Notifies(r)</td>
+                            <td class="text-nowrap">
+                                @if (r.LastError is not null)
+                                {
+                                    <span class="dg-dot dg-dot-bad"></span><span title="@r.LastError">failed</span>
+                                    <div class="small text-body-secondary text-truncate" style="max-width: 16rem;" title="@r.LastError">@r.LastError</div>
+                                }
+                                else
+                                {
+                                    @(r.LastRunAt is null ? "never" : AgentHealth.Ago(r.LastRunAt))
+                                }
+                            </td>
+                            <td class="text-nowrap">@(r.LastFiredAt is null ? "never" : AgentHealth.Ago(r.LastFiredAt))</td>
+                            <td class="num"><a href="@($"alerts/history?rule={r.Id}")">@r.Fired7d</a></td>
+                            <td class="text-end text-nowrap">
+                                <button type="button" class="btn btn-sm btn-link" disabled="@(_running == r.Id)" @onclick="() => RunAsync(r)">@(_running == r.Id ? "Running…" : "Run now")</button>
+                                <button type="button" class="btn btn-sm btn-link" @onclick="() => ToggleAsync(r)">@(r.Enabled ? "Turn off" : "Turn on")</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_rules.Count == 0 && _loaded)
+                    {
+                        <tr>
+                            <td colspan="9" class="text-body-secondary">
+                                No alerts yet. Run a search, then choose <strong>Create alert</strong>, or start with <a href="alerts/new">New alert</a>.
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<AlertRuleSummary> _rules = [];
+    private bool _loaded;
+    private string? _error;
+    private string? _notice;
+    private Guid? _running;
+    private bool _packOpen;
+    private bool _adding;
+    private string? _email;
+    private HashSet<string> _existing = [];
+    private readonly HashSet<string> _picked = [];
+    private List<SecurityAlerts.Template> _templates = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_access?.IsGlobalAdmin == true)
+        {
+            _rules = await Alerts.ListRulesAsync(_access, CancellationToken.None);
+            _loaded = true;
+        }
+    }
+
+    private async Task OpenPack()
+    {
+        var user = (await AuthState).User;
+        _email = user.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+            ?? (user.Identity?.Name is { } name && name.Contains('@', StringComparison.Ordinal) ? name : null);
+        _existing = _rules.Select(r => r.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Templates for switched-off features (threat intel) aren't offered.
+        var features = await Features.GetAsync(CancellationToken.None);
+        _templates = SecurityAlerts.All.Where(t => features.ThreatIntel || t.Group != SecurityAlerts.ThreatIntel).ToList();
+        _picked.Clear();
+        foreach (var t in _templates.Where(t => !_existing.Contains(t.Name)))
+        {
+            _picked.Add(t.Name);
+        }
+        _packOpen = true;
+    }
+
+    private void Pick(string name, bool on)
+    {
+        if (on)
+        {
+            _picked.Add(name);
+        }
+        else
+        {
+            _picked.Remove(name);
+        }
+    }
+
+    private async Task AddPackAsync()
+    {
+        _error = _notice = null;
+        _adding = true;
+        var added = 0;
+        try
+        {
+            foreach (var template in _templates.Where(t => _picked.Contains(t.Name)))
+            {
+                await Alerts.SaveRuleAsync(_access!, SecurityAlerts.ToForm(template, _email), CancellationToken.None);
+                added++;
+            }
+            _notice = $"Added {added} alert{(added == 1 ? "" : "s")}. Check Notifications if email or tickets aren't set up yet.";
+            _packOpen = false;
+        }
+        catch (AdminException ex)
+        {
+            _error = $"Added {added}, then: {ex.Message}";
+        }
+        finally
+        {
+            _adding = false;
+            await LoadAsync();
+        }
+    }
+
+    private static string Notifies(AlertRuleSummary r) => (r.Emails, r.Tickets) switch
+    {
+        (true, true) => "Email, ticket",
+        (true, false) => "Email",
+        (false, true) => "Ticket",
+        _ => "History only",
+    };
+
+    private async Task ToggleAsync(AlertRuleSummary rule)
+    {
+        _error = _notice = null;
+        try
+        {
+            await Alerts.SetEnabledAsync(_access!, rule.Id, !rule.Enabled, CancellationToken.None);
+            await LoadAsync();
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task RunAsync(AlertRuleSummary rule)
+    {
+        _error = _notice = null;
+        _running = rule.Id;
+        try
+        {
+            var sent = await Alerts.RunNowAsync(_access!, rule.Id, CancellationToken.None);
+            await LoadAsync();
+            var updated = _rules.FirstOrDefault(r => r.Id == rule.Id);
+            if (updated?.LastError is { } error)
+            {
+                _error = $"{rule.Name}: {error}";
+            }
+            else
+            {
+                _notice = sent switch
+                {
+                    0 => $"{rule.Name} ran: nothing new to alert on (no match, or repeats still in their quiet period).",
+                    1 => $"{rule.Name} ran and sent 1 alert.",
+                    _ => $"{rule.Name} ran and sent {sent} alerts.",
+                };
+            }
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _running = null;
+        }
+    }
+}

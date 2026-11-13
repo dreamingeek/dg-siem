@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  agent:
+    strategy:
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Publish Native AOT agent
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          dotnet publish src/DreaminGeek.Siem.Agent -c Release -r ${{ matrix.rid }} -p:Version=$VERSION -o out
+          mkdir pkg
+          cp out/dg-siem-agent pkg/
+          cp deploy/agent/*.service deploy/agent/*.path deploy/agent/install.sh LICENSE pkg/
+          tar -czf dg-siem-agent-${{ matrix.rid }}.tar.gz -C pkg .
+          if [ "${{ matrix.rid }}" = "linux-x64" ]; then
+            readelf -n out/dg-siem-agent | grep -q "x86 ISA needed: x86-64-baseline$" || { echo "::error::agent needs more than baseline x86-64"; exit 1; }
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.rid }}
+          path: dg-siem-agent-${{ matrix.rid }}.tar.gz
+
+  agent-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Publish Native AOT agent (win-x64)
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          dotnet publish src/DreaminGeek.Siem.Agent -c Release -r win-x64 -p:Version=$version -o out
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item out/dg-siem-agent.exe, deploy/agent/install.ps1, LICENSE pkg/
+          Compress-Archive -Path pkg/* -DestinationPath dg-siem-agent-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-win-x64
+          path: dg-siem-agent-win-x64.zip
+
+  publish:
+    needs: [agent, agent-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip --generate-notes
+
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/DreaminGeek.Siem.Web/Dockerfile
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/dreamingeek/dg-siem-server:${{ github.ref_name }}
+            ghcr.io/dreamingeek/dg-siem-server:latest

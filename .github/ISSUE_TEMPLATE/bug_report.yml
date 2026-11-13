@@ -1,0 +1,32 @@
+name: Bug report
+description: Something doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Security problem? Please report it privately instead (Security tab → Report a vulnerability). Remove addresses, hostnames and anything else private from logs you paste."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or sample lines
+      description: Server log (`docker compose logs dg-siem-server`), agent log, or the log lines that didn't parse.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown at the bottom of Administration → Health; agents report theirs on the Agents page.
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      description: "e.g. docker compose on Ubuntu 24.04, agent on Windows Server 2022"

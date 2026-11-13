@@ -1,0 +1,20 @@
+@using DreaminGeek.Siem.Web.Security
+@* Renders its content only for global admins. The admin service re-checks on every action. *@
+
+@if (Access is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (!Access.IsGlobalAdmin)
+{
+    <p class="text-body-secondary">Only global admins can manage this. Ask an admin if you need a change here.</p>
+}
+else
+{
+    @ChildContent
+}
+
+@code {
+    [Parameter] public UserAccess? Access { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

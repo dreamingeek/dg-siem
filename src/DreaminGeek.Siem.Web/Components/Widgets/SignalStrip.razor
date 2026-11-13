@@ -1,0 +1,33 @@
+@using System.Globalization
+@* Thin volume histogram. Each bar is a time bucket; clicking one zooms to it (when OnSelect is set). *@
+
+<div class="dg-signal @(Small ? "dg-signal-sm" : "")" role="group" aria-label="@Label">
+    @foreach (var bucket in Buckets)
+    {
+        var pct = _max == 0 ? 0 : Math.Max(4, (int)Math.Round(100.0 * bucket.Count / _max));
+        var title = $"{Local(bucket.Start)}: {bucket.Count.ToString("N0", CultureInfo.InvariantCulture)} events";
+        <button type="button" class="@(bucket.Count == 0 ? "dg-zero" : "")" style="height: @(pct)%;" title="@title" aria-label="@title"
+                disabled="@(!OnSelect.HasDelegate || bucket.Count == 0)" @onclick="() => OnSelect.InvokeAsync(bucket.Start)"></button>
+    }
+</div>
+@if (!Small && Buckets.Count > 0)
+{
+    <div class="dg-signal-axis">
+        <span>@Local(Buckets[0].Start)</span>
+        <span>@Local(Buckets[^1].Start + Span)</span>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<SignalBucket> Buckets { get; set; } = [];
+    [Parameter] public TimeSpan Span { get; set; } = TimeSpan.FromHours(1);
+    [Parameter] public bool Small { get; set; }
+    [Parameter] public string Label { get; set; } = "Event volume over time";
+    [Parameter] public EventCallback<DateTime> OnSelect { get; set; }
+
+    private long _max;
+
+    protected override void OnParametersSet() => _max = Buckets.Count == 0 ? 0 : Buckets.Max(b => b.Count);
+
+    private string Local(DateTime utc) => utc.ToString(Span < TimeSpan.FromDays(1) ? "MMM d HH:mm" : "MMM d", CultureInfo.InvariantCulture);
+}

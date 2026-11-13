@@ -1,0 +1,207 @@
+@* One dashboard panel: runs its search for the window and tenants, then draws it. *@
+@using System.Globalization
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Dashboards
+@using DreaminGeek.Siem.Web.Security
+@implements IAsyncDisposable
+@inject DashboardService Dashboards
+@inject IJSRuntime JS
+@inject DreaminGeek.Siem.Web.GeoIp.GeoIpUpdater GeoIp
+
+<div class="dg-tile @(Editing ? "dg-tile-editing" : "")">
+    <div class="dg-tile-head">
+        <h2 title="@Panel.Title">@Panel.Title</h2>
+        @if (Editing)
+        {
+            <button type="button" class="dg-tile-btn" title="Edit panel" aria-label="@($"Edit {Panel.Title}")" @onclick="() => OnEdit.InvokeAsync(Panel)">Edit</button>
+            <button type="button" class="dg-tile-btn" title="Remove panel" aria-label="@($"Remove {Panel.Title}")" @onclick="() => OnRemove.InvokeAsync(Panel)">×</button>
+        }
+        else if (ShowSearchLink)
+        {
+            <a class="dg-tile-btn" href="@SearchLink" title="Open in search" aria-label="@($"Open {Panel.Title} in search")">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3.5 3.5" /></svg>
+            </a>
+        }
+    </div>
+    <div class="dg-tile-body">
+        @if (_loading && _result is null)
+        {
+            <div class="dg-tile-msg"><span class="dg-loading-bar" aria-label="Loading"></span></div>
+        }
+        else if (_result?.Error is { } error)
+        {
+            <div class="dg-tile-msg dg-tile-error" title="@error">@error</div>
+        }
+        else if (_result is { } r)
+        {
+            @if (Panel.Kind == PanelKind.Stat)
+            {
+                var change = PanelData.Change(r.Value, r.Previous);
+                <div class="dg-stat">
+                    <div class="dg-stat-value">@PanelData.Format(r.Value, Panel.Unit)</div>
+                    @if (change is not null)
+                    {
+                        <div class="dg-stat-change" title="@($"Previous period: {PanelData.Format(r.Previous, Panel.Unit)}")">@(change.EndsWith('×') ? $"{change} previous" : $"{change} vs previous")</div>
+                    }
+                    @if (r.Spark is not null)
+                    {
+                        <div class="dg-stat-spark" @ref="_chart"></div>
+                    }
+                </div>
+            }
+            else if (Panel.Kind == PanelKind.Table)
+            {
+                @if (r.Empty)
+                {
+                    <div class="dg-tile-msg">No results in this period.</div>
+                }
+                else
+                {
+                    <div class="dg-tile-table">
+                        <table class="table table-sm mb-0">
+                            <thead><tr>@for (var c = 0; c < r.Columns.Count; c++) { <th class="@(r.NumericColumns.Contains(c) ? "text-end" : "")">@r.Columns[c]</th> }</tr></thead>
+                            <tbody>
+                                @foreach (var row in r.Rows)
+                                {
+                                    <tr>@for (var c = 0; c < row.Count; c++) { var v = row[c]; <td class="@(r.NumericColumns.Contains(c) ? "text-end" : "")" title="@v">@(v.Length == 0 ? "–" : v)</td> }</tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else if (r.Empty)
+            {
+                <div class="dg-tile-msg">No results in this period.</div>
+            }
+            else
+            {
+                <div class="dg-tile-chart" @ref="_chart"></div>
+                @if (Panel.Kind == PanelKind.Map && GeoIp.Provider == DreaminGeek.Siem.Alerting.GeoIpProvider.DbIpLite)
+                {
+                    <a class="dg-tile-credit" href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a>
+                }
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DashboardPanel Panel { get; set; } = default!;
+    [Parameter, EditorRequired] public UserAccess Access { get; set; } = default!;
+    [Parameter] public DateTimeOffset From { get; set; }
+    [Parameter] public DateTimeOffset To { get; set; }
+    [Parameter] public IReadOnlyList<string> Tenants { get; set; } = [];
+    /// <summary>Bumped by the dashboard to re-run (refresh).</summary>
+    [Parameter] public int Version { get; set; }
+    [Parameter] public bool Editing { get; set; }
+    [Parameter] public bool ShowSearchLink { get; set; } = true;
+    [Parameter] public string Range { get; set; } = "-24h";
+    [Parameter] public EventCallback<DashboardPanel> OnEdit { get; set; }
+    [Parameter] public EventCallback<DashboardPanel> OnRemove { get; set; }
+
+    private ElementReference _chart;
+    private IJSObjectReference? _module;
+    private PanelResult? _result;
+    private bool _loading;
+    private bool _pendingDraw;
+    private string? _lastKey;
+    private CancellationTokenSource? _cts;
+
+    private string SearchLink =>
+        $"search?q={Uri.EscapeDataString(Panel.Query)}&range={Uri.EscapeDataString(Range)}" + (Tenants.Count == 1 ? $"&tenant={Uri.EscapeDataString(Tenants[0])}" : "");
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = string.Join('\u001f', Panel.Query, Panel.Kind, From.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
+            To.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture), string.Join(',', Tenants), Version.ToString(CultureInfo.InvariantCulture));
+        if (key == _lastKey)
+        {
+            // Only the unit or title changed: redraw with what we have.
+            _pendingDraw = _result is not null;
+            return;
+        }
+        _lastKey = key;
+        if (_cts is not null)
+        {
+            await _cts.CancelAsync();
+            _cts.Dispose();
+        }
+        _cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var ct = _cts.Token;
+        _loading = true;
+        try
+        {
+            var result = await Dashboards.RunPanelAsync(Access, Panel, From, To, Tenants, ct);
+            if (!ct.IsCancellationRequested)
+            {
+                _result = result;
+                _pendingDraw = true;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Superseded by a newer run, or timed out.
+            if (_lastKey == key)
+            {
+                _result = new PanelResult { Error = "The search took too long. Narrow it or shorten the time range." };
+            }
+        }
+        catch (AdminException ex)
+        {
+            _result = new PanelResult { Error = ex.Message };
+        }
+        finally
+        {
+            if (_lastKey == key)
+            {
+                _loading = false;
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_pendingDraw || _result is not { Error: null } r)
+        {
+            return;
+        }
+        var spec = Panel.Kind == PanelKind.Stat ? r.Spark : r.Chart;
+        if (spec is null || Panel.Kind == PanelKind.Table || (Panel.Kind != PanelKind.Stat && r.Empty))
+        {
+            _pendingDraw = false;
+            return;
+        }
+        _pendingDraw = false;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/dashboard.js");
+            await _module.InvokeVoidAsync("renderPanel", _chart, spec, Panel.Unit.ToString());
+        }
+        catch (JSDisconnectedException)
+        {
+            // Page closed.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_cts is not null)
+        {
+            await _cts.CancelAsync();
+            _cts.Dispose();
+        }
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("disposePanel", _chart);
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Page closed.
+            }
+        }
+    }
+}

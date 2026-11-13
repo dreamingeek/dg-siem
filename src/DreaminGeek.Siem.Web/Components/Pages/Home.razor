@@ -1,0 +1,247 @@
+@page "/"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Query
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Search
+@using DreaminGeek.Siem.Web.Security
+@inject SearchService Searcher
+@inject TenantAccess Access
+@inject AgentHealth Health
+
+<PageTitle>Overview · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Overview</h1>
+    <div class="ms-auto d-flex gap-2">
+        <select class="form-select form-select-sm w-auto" @bind="_range" @bind:after="LoadAsync" aria-label="Time range">
+            <option value="-1h">Last hour</option>
+            <option value="-24h">Last 24 hours</option>
+            <option value="-7d">Last 7 days</option>
+            <option value="-30d">Last 30 days</option>
+        </select>
+    </div>
+</div>
+
+@if (_access is { Tenants.Count: 0 })
+{
+    <p class="text-body-secondary">Your account doesn't have access to any tenants yet. An admin can grant access on the Users page.</p>
+}
+else
+{
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small">@_error</div>
+    }
+
+    <div class="dg-figures mb-3">
+        <a href="@SearchLink("*")">
+            <div class="dg-figure">@Fmt(_total)</div>
+            <div class="dg-figure-label">Events</div>
+        </a>
+        <a href="@SearchLink("dataset=unifi.firewall event.type=denied")">
+            <div class="dg-figure">@Fmt(_blocks)</div>
+            <div class="dg-figure-label">Firewall blocks</div>
+        </a>
+        <a href="@SearchLink("dataset=unifi.detection")">
+            <div class="dg-figure">@Fmt(_detections)</div>
+            <div class="dg-figure-label">IDS/IPS detections</div>
+        </a>
+        <a href="@(_isAdmin ? "admin/agents" : null)">
+            <div class="dg-figure">@_agents.Count(a => a.State == AgentState.Online)<span class="text-body-secondary fs-6"> / @_agents.Count(a => a.State != AgentState.Revoked)</span></div>
+            <div class="dg-figure-label">Agents reporting</div>
+        </a>
+    </div>
+
+    <section class="dg-panel mb-3">
+        <header>
+            <h2>Event volume by tenant</h2>
+            <span class="dg-aside">@SignalBucket.SpanText(_span) per bar</span>
+        </header>
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th style="width: 8rem;">Tenant</th>
+                        <th>Volume</th>
+                        <th class="num" style="width: 7rem;">Events</th>
+                        <th class="num" style="width: 7rem;">Blocks</th>
+                        <th class="num" style="width: 7rem;">Detections</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in _tenants)
+                    {
+                        <tr>
+                            <td><a href="@SearchLink("*", t.Tenant)">@t.Tenant</a></td>
+                            <td><SignalStrip Buckets="t.Buckets" Span="_span" Small="true" Label="@($"Event volume for {t.Tenant}")" /></td>
+                            <td class="num">@Fmt(t.Events)</td>
+                            <td class="num">@Fmt(t.Blocks)</td>
+                            <td class="num">@Fmt(t.Detections)</td>
+                        </tr>
+                    }
+                    @if (_loading && _tenants.Count == 0)
+                    {
+                        <tr><td colspan="5" class="text-body-secondary">Loading…</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <div class="row g-3">
+        <div class="col-xl-7">
+            <section class="dg-panel h-100">
+                <header>
+                    <h2>Latest security events</h2>
+                    <a class="dg-aside" href="@SearchLink(SecurityQuery)">Open in search</a>
+                </header>
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead><tr><th>Time (UTC)</th><th>Tenant</th><th>Type</th><th>Source</th><th>Destination</th><th>Detail</th></tr></thead>
+                        <tbody>
+                            @foreach (var row in _security)
+                            {
+                                <tr>
+                                    <td class="text-nowrap">@row[0]</td>
+                                    <td>@row[1]</td>
+                                    <td class="text-nowrap">@(row[2] == "unifi.detection" ? "Detection" : "Block")</td>
+                                    <td class="text-nowrap">@row[3]</td>
+                                    <td class="text-nowrap">@row[4]</td>
+                                    <td class="text-truncate" style="max-width: 24rem;" title="@row[5]">@row[5]</td>
+                                </tr>
+                            }
+                            @if (!_loading && _security.Count == 0)
+                            {
+                                <tr><td colspan="6" class="text-body-secondary">No firewall blocks or detections in this period.</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+        <div class="col-xl-5">
+            <section class="dg-panel h-100">
+                <header>
+                    <h2>Agents</h2>
+                    @if (_isAdmin)
+                    {
+                        <a class="dg-aside" href="admin/agents">Manage</a>
+                    }
+                </header>
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead><tr><th>Agent</th><th>Tenant</th><th>Last report</th><th>Version</th></tr></thead>
+                        <tbody>
+                            @foreach (var a in _agents)
+                            {
+                                <tr>
+                                    <td class="text-nowrap"><span class="dg-dot @Dot(a.State)" aria-hidden="true"></span>@a.Name</td>
+                                    <td>@a.Tenant</td>
+                                    <td class="text-nowrap" title="@a.LastSeen?.ToString("u", CultureInfo.InvariantCulture)">@(a.State == AgentState.Revoked ? "revoked" : AgentHealth.Ago(a.LastSeen))</td>
+                                    <td>@a.Version</td>
+                                </tr>
+                            }
+                            @if (!_loading && _agents.Count == 0)
+                            {
+                                <tr><td colspan="4" class="text-body-secondary">No agents enrolled yet.</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+}
+
+@code {
+    private const string SecurityQuery = "dataset IN (unifi.firewall, unifi.detection)";
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private sealed record TenantRow(string Tenant, long Events, long Blocks, long Detections, List<SignalBucket> Buckets);
+
+    private UserAccess? _access;
+    private bool _isAdmin;
+    private string _range = "-24h";
+    private TimeSpan _span = TimeSpan.FromHours(1);
+    private bool _loading = true;
+    private string? _error;
+    private long _total, _blocks, _detections;
+    private List<TenantRow> _tenants = [];
+    private List<string[]> _security = [];
+    private IReadOnlyList<AgentStatus> _agents = [];
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access is null || _access.Tenants.Count == 0)
+        {
+            _loading = false;
+            return;
+        }
+        _isAdmin = _access.IsGlobalAdmin;
+        var tenants = _access.Tenants;
+        var now = DateTimeOffset.UtcNow;
+        var from = SearchService.ParseTime(_range, now, now.AddHours(-24));
+        _span = (now - from).TotalHours <= 1 ? TimeSpan.FromMinutes(5) : (now - from).TotalHours <= 24 ? TimeSpan.FromHours(1) : (now - from).TotalDays <= 7 ? TimeSpan.FromHours(6) : TimeSpan.FromDays(1);
+
+        var countsTask = Searcher.RunAsync("* | stats count() as n by tenant, dataset", from, now, tenants, CancellationToken.None);
+        var volumeTask = Searcher.RunAsync($"* | timechart span={SignalBucket.SpanText(_span)} count by tenant", from, now, tenants, CancellationToken.None);
+        var securityTask = Searcher.RunAsync(
+            $"{SecurityQuery} | table @timestamp, tenant, event.dataset, source.ip, destination.ip, message | head 12", from, now, tenants, CancellationToken.None);
+        _agents = await Health.ListAsync(tenants, CancellationToken.None);
+        var counts = await countsTask;
+        var volume = await volumeTask;
+        var security = await securityTask;
+        _error = counts.Error ?? volume.Error ?? security.Error;
+
+        // Totals per tenant from one stats query.
+        var perTenant = tenants.ToDictionary(t => t, _ => (Events: 0L, Blocks: 0L, Detections: 0L));
+        foreach (var row in counts.Result?.Rows ?? [])
+        {
+            var tenant = (string)row[0]!;
+            var dataset = (string)row[1]!;
+            var n = Convert.ToInt64(row[2], CultureInfo.InvariantCulture);
+            var c = perTenant.GetValueOrDefault(tenant);
+            perTenant[tenant] = (c.Events + n, c.Blocks + (dataset == "unifi.firewall" ? n : 0), c.Detections + (dataset == "unifi.detection" ? n : 0));
+        }
+        _total = perTenant.Values.Sum(v => v.Events);
+        _blocks = perTenant.Values.Sum(v => v.Blocks);
+        _detections = perTenant.Values.Sum(v => v.Detections);
+
+        // Zero-filled volume buckets per tenant.
+        var volumeByTenant = new Dictionary<string, Dictionary<DateTime, long>>(StringComparer.Ordinal);
+        foreach (var row in volume.Result?.Rows ?? [])
+        {
+            if (row[0] is DateTime bucket && row[1] is string tenant)
+            {
+                (volumeByTenant.TryGetValue(tenant, out var map) ? map : volumeByTenant[tenant] = [])[DateTime.SpecifyKind(bucket, DateTimeKind.Utc)] =
+                    Convert.ToInt64(row[2], CultureInfo.InvariantCulture);
+            }
+        }
+        _tenants = tenants.Select(t => new TenantRow(t, perTenant[t].Events, perTenant[t].Blocks, perTenant[t].Detections,
+            SignalBucket.Fill(from, now, _span, volumeByTenant.GetValueOrDefault(t) ?? []))).ToList();
+
+        _security = (security.Result?.Rows ?? []).Select(r => r.Select(SearchService.Format).ToArray()).ToList();
+        _loading = false;
+    }
+
+    private string SearchLink(string query, string? tenant = null) =>
+        $"search?q={Uri.EscapeDataString(query)}&range={Uri.EscapeDataString(_range)}" + (tenant is null ? "" : $"&tenant={Uri.EscapeDataString(tenant)}");
+
+    private static string Fmt(long n) => n.ToString("N0", CultureInfo.InvariantCulture);
+
+    private static string Dot(AgentState state) => state switch
+    {
+        AgentState.Online => "dg-dot-ok",
+        AgentState.Late => "dg-dot-warn",
+        AgentState.Offline => "dg-dot-bad",
+        _ => "dg-dot-off",
+    };
+}

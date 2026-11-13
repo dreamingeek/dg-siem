@@ -1,0 +1,338 @@
+@page "/admin/threat-intel"
+@rendermode InteractiveServer
+@implements IDisposable
+@using System.Globalization
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Ingest.ThreatIntel
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Health
+@using DreaminGeek.Siem.Web.Security
+@using DreaminGeek.Siem.Web.ThreatIntel
+@using DreaminGeek.Siem.Web.Components.Widgets
+@inject ThreatIntelService ThreatIntel
+@inject ThreatIntelEnricher Enricher
+@inject DreaminGeek.Siem.Web.Features.FeatureState Features
+@inject SettingsStore Settings
+@inject TenantAccess Access
+
+<PageTitle>Threat intel · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Threat intel</h1>
+    <p>Events to or from an address on these lists are marked as they arrive: search them with <code>threat_feed=*</code>.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_features is { ThreatIntel: false })
+    {
+        <div class="dg-callout" style="max-width: 48rem;">
+            <p class="mb-2">Threat intel is off, so nothing is downloaded and events aren't marked.</p>
+            <a class="btn btn-sm btn-primary" href="admin/features">Turn it on under Features</a>
+        </div>
+    }
+    else if (_features is not null)
+    {
+        <div class="d-flex flex-wrap align-items-baseline gap-3 mb-3">
+            <span>
+                @(Enricher.IsOn
+                    ? $"{Enricher.Indicators.ToString("N0", CultureInfo.InvariantCulture)} addresses and ranges from {_feeds.Count(f => f.Enabled && f.Entries > 0) + (_own.Count > 0 ? 1 : 0)} lists. {Enricher.Matched.ToString("N0", CultureInfo.InvariantCulture)} events marked since the server started."
+                    : "Loading the lists…")
+            </span>
+            <a href="search?q=@Uri.EscapeDataString("threat_feed=* | stats count() as events by threat_feed, threat_on, threat_ip, threat_reason, tenant")&range=-24h">Marked events, last 24 hours</a>
+            <a href="alerts">Alerts</a>
+        </div>
+
+        <div class="row g-3">
+            <div class="col-xl-8">
+                <section class="dg-panel mb-3">
+                    <header>
+                        <h2>Feeds</h2>
+                        <span class="dg-aside">Downloaded by this server from each publisher</span>
+                    </header>
+                    <ul class="dg-feeds">
+                        @foreach (var feed in _feeds)
+                        {
+                            var id = $"feed-{feed.Id}";
+                            <li>
+                                <div class="form-check form-switch m-0">
+                                    <input id="@id" class="form-check-input" type="checkbox" role="switch" checked="@feed.Enabled" disabled="@_busy"
+                                           @onchange="e => SetFeedAsync(feed.Id, e.Value is true)" />
+                                </div>
+                                <div class="dg-feed-main">
+                                    <label for="@id" class="fw-medium">@feed.Name</label>
+                                    <div class="small text-body-secondary">
+                                        @feed.About
+                                        @if (feed.TermsUrl is not null)
+                                        {
+                                            <a href="@feed.TermsUrl" target="_blank" rel="noopener" class="ms-1">Terms</a>
+                                        }
+                                    </div>
+                                    @if (feed.Caution is not null)
+                                    {
+                                        <div class="small text-warning mt-1">@feed.Caution</div>
+                                    }
+                                    @if (feed.Custom)
+                                    {
+                                        <div class="small text-body-secondary text-break">@feed.Url</div>
+                                    }
+                                </div>
+                                <div class="dg-feed-state small">
+                                    @if (!feed.Enabled)
+                                    {
+                                        <span class="text-body-secondary">Off</span>
+                                    }
+                                    else if (feed.Error is not null)
+                                    {
+                                        <span class="text-danger">@feed.Error</span>
+                                        @if (feed.Downloaded is { } d)
+                                        {
+                                            <div class="text-body-secondary">Using the copy from @HealthText.Duration(DateTimeOffset.UtcNow - d) ago (@feed.Entries.ToString("N0", CultureInfo.InvariantCulture))</div>
+                                        }
+                                    }
+                                    else if (feed.Downloaded is { } downloaded)
+                                    {
+                                        <span>@feed.Entries.ToString("N0", CultureInfo.InvariantCulture) @(feed.Entries == 1 ? "entry" : "entries")</span>
+                                        <div class="text-body-secondary">Updated @HealthText.Duration(DateTimeOffset.UtcNow - downloaded) ago, every @Every(feed.Interval)</div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-body-secondary">Not downloaded yet</span>
+                                    }
+                                    @if (feed.Enabled)
+                                    {
+                                        <div class="mt-1">
+                                            <button type="button" class="btn btn-link btn-sm p-0" disabled="@_busy" @onclick="() => UpdateNow(feed.Id)">Update now</button>
+                                            @if (feed.Custom)
+                                            {
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2" disabled="@_busy" @onclick="() => RemoveFeedAsync(feed.Id)">Remove</button>
+                                            }
+                                        </div>
+                                    }
+                                    else if (feed.Custom)
+                                    {
+                                        <div class="mt-1"><button type="button" class="btn btn-link btn-sm p-0" disabled="@_busy" @onclick="() => RemoveFeedAsync(feed.Id)">Remove</button></div>
+                                    }
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                    <div class="dg-body border-top">
+                        <h3 class="h6">Add a feed</h3>
+                        <p class="small text-body-secondary mb-2">Any list at a web address with one address or range per line (<code>#</code> comments allowed). It's downloaded every 6 hours.</p>
+                        <div class="row g-2 align-items-end">
+                            <div class="col-sm-4">
+                                <label class="form-label small" for="fname">Name</label>
+                                <input id="fname" class="form-control form-control-sm" @bind="_feedName" maxlength="60" />
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label small" for="furl">Address of the list</label>
+                                <input id="furl" class="form-control form-control-sm" @bind="_feedUrl" placeholder="https://" spellcheck="false" />
+                            </div>
+                            <div class="col-sm-2">
+                                <button type="button" class="btn btn-sm btn-outline-secondary w-100" disabled="@_busy" @onclick="AddFeedAsync">Add</button>
+                            </div>
+                        </div>
+                        <Status Value="@_feedOutcome" />
+                    </div>
+                </section>
+
+                <section class="dg-panel mb-3">
+                    <header>
+                        <h2>Your list</h2>
+                        <span class="dg-aside">Checked first: your note wins over a feed's</span>
+                    </header>
+                    <div class="dg-body">
+                        <label class="form-label small" for="own">Addresses or ranges, one per line; anything after the address is its note</label>
+                        <textarea id="own" class="form-control form-control-sm font-monospace" rows="3" @bind="_ownLines" spellcheck="false"
+                                  placeholder="@("203.0.113.7 brute-forced the VPN\n198.51.100.0/24")"></textarea>
+                        <div class="row g-2 align-items-end mt-1">
+                            <div class="col-sm-9">
+                                <label class="form-label small" for="ownnote">Note for lines without one</label>
+                                <input id="ownnote" class="form-control form-control-sm" @bind="_ownNote" maxlength="200" />
+                            </div>
+                            <div class="col-sm-3">
+                                <button type="button" class="btn btn-sm btn-primary w-100" disabled="@_busy" @onclick="AddOwnAsync">Add to your list</button>
+                            </div>
+                        </div>
+                        <Status Value="@_ownOutcome" />
+                    </div>
+                    @if (_own.Count > 0)
+                    {
+                        <div class="table-responsive">
+                            <table class="table mb-0">
+                                <thead><tr><th>Address or range</th><th>Note</th><th>Added</th><th aria-label="Actions"></th></tr></thead>
+                                <tbody>
+                                    @foreach (var o in _own.OrderByDescending(o => o.At))
+                                    {
+                                        <tr>
+                                            <td class="font-monospace text-nowrap">@o.Value</td>
+                                            <td>@o.Note</td>
+                                            <td class="small text-body-secondary text-nowrap">@o.At.ToString("d MMM yyyy", CultureInfo.InvariantCulture), @o.By</td>
+                                            <td class="text-end"><button type="button" class="btn btn-link btn-sm py-0" disabled="@_busy" @onclick="() => RemoveOwnAsync(o.Value)">Remove</button></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </section>
+            </div>
+
+            <div class="col-xl-4">
+                <section class="dg-panel mb-3">
+                    <header><h2>Check an address</h2></header>
+                    <div class="dg-body">
+                        <form class="d-flex gap-2" @onsubmit="Check" @onsubmit:preventDefault>
+                            <label class="visually-hidden" for="check">Address</label>
+                            <input id="check" class="form-control form-control-sm font-monospace" @bind="_check" placeholder="198.51.100.7" spellcheck="false" />
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">Check</button>
+                        </form>
+                        @if (_checked is not null)
+                        {
+                            <p class="small mt-2 mb-0" role="status">
+                                @if (_checkMatch is { } m)
+                                {
+                                    <span><strong>@_checked</strong> is on <strong>@m.Feed</strong>: @m.Description@(m.Indicator != _checked ? $" ({m.Indicator})" : "").</span>
+                                }
+                                else if (System.Net.IPAddress.TryParse(_checked, out _))
+                                {
+                                    <span><strong>@_checked</strong> isn't on any list that's on.</span>
+                                }
+                                else
+                                {
+                                    <span class="text-danger">That isn't an address.</span>
+                                }
+                            </p>
+                        }
+                    </div>
+                </section>
+                <section class="dg-panel">
+                    <header><h2>How events are marked</h2></header>
+                    <div class="dg-body small">
+                        <p>Each event's source and destination address are looked up as it arrives. A match adds:</p>
+                        <dl class="mb-2">
+                            <dt><code>threat_feed</code></dt><dd>the list it's on</dd>
+                            <dt><code>threat_on</code></dt><dd><code>destination.ip</code> (something reached out to it) or <code>source.ip</code> (it reached in)</dd>
+                            <dt><code>threat_ip</code>, <code>threat_reason</code></dt><dd class="mb-0">the address and why it's listed</dd>
+                        </dl>
+                        <p class="mb-0 text-body-secondary">Outbound matches matter most: a device inside talking to a botnet controller. Inbound ones are mostly scanning your firewall already blocks. Events already stored aren't re-checked when a list changes.</p>
+                    </div>
+                </section>
+            </div>
+        </div>
+    }
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private string? _by;
+    private FeatureSettings? _features;
+    private IReadOnlyList<ThreatFeedStatus> _feeds = [];
+    private IReadOnlyList<OwnThreatEntry> _own = [];
+    private bool _busy;
+    private string _feedName = string.Empty;
+    private string _feedUrl = string.Empty;
+    private string _ownLines = string.Empty;
+    private string _ownNote = string.Empty;
+    private string _check = string.Empty;
+    private string? _checked;
+    private ThreatMatch? _checkMatch;
+    private Outcome? _feedOutcome;
+    private Outcome? _ownOutcome;
+    private Timer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthState).User;
+        _access = await Access.GetAsync(user, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _by = user.Identity?.Name ?? "admin";
+        _features = await Features.GetAsync(CancellationToken.None);
+        await LoadAsync();
+        // Downloads finish in the background: refresh while the page is open.
+        _timer = new Timer(_ => InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_features?.ThreatIntel != true)
+        {
+            return;
+        }
+        _feeds = await ThreatIntel.GetFeedsAsync(CancellationToken.None);
+        _own = (await Settings.GetThreatIntelAsync(CancellationToken.None)).Own;
+    }
+
+    private async Task Do(Func<Task> action, Action<Outcome?> show, string? done = null)
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        try
+        {
+            await action();
+            show(done is null ? null : new Outcome(true, done));
+            await LoadAsync();
+        }
+        catch (AdminException ex)
+        {
+            show(new Outcome(false, ex.Message));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task SetFeedAsync(string id, bool on) => Do(() => ThreatIntel.SetFeedEnabledAsync(id, on, CancellationToken.None), o => _feedOutcome = o);
+
+    private void UpdateNow(string id)
+    {
+        ThreatIntel.UpdateNow(id);
+        _feedOutcome = new(true, "Downloading in the background; this list updates when it's done.");
+    }
+
+    private Task AddFeedAsync() => Do(async () =>
+    {
+        await ThreatIntel.AddFeedAsync(_feedName, _feedUrl, CancellationToken.None);
+        _feedName = _feedUrl = string.Empty;
+    }, o => _feedOutcome = o, "Added. It downloads within a minute.");
+
+    private Task RemoveFeedAsync(string id) => Do(() => ThreatIntel.RemoveFeedAsync(id, CancellationToken.None), o => _feedOutcome = o, "Removed.");
+
+    private Task AddOwnAsync() => Do(async () =>
+    {
+        var added = await ThreatIntel.AddOwnAsync(_ownLines, _ownNote, _by!, CancellationToken.None);
+        _ownLines = _ownNote = string.Empty;
+        _ownOutcome = new(true, $"Added {added}. New events are checked against {(added == 1 ? "it" : "them")} within a minute.");
+    }, o => _ownOutcome = o ?? _ownOutcome);
+
+    private Task RemoveOwnAsync(string value) => Do(() => ThreatIntel.RemoveOwnAsync(value, CancellationToken.None), o => _ownOutcome = o, $"Removed {value}.");
+
+    private void Check()
+    {
+        _checked = _check.Trim();
+        _checkMatch = _checked.Length == 0 ? null : ThreatIntel.Check(_checked);
+        if (_checked.Length == 0)
+        {
+            _checked = null;
+        }
+    }
+
+    private static string Every(TimeSpan interval) =>
+        interval >= TimeSpan.FromDays(1) ? "day" : interval.TotalHours >= 1 ? $"{interval.TotalHours:0} hours".Replace("1 hours", "hour", StringComparison.Ordinal) : $"{interval.TotalMinutes:0} minutes";
+
+    public void Dispose() => _timer?.Dispose();
+}

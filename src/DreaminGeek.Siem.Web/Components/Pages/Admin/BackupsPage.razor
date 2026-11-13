@@ -1,0 +1,288 @@
+@page "/admin/backups"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Backups
+@using DreaminGeek.Siem.Web.Security
+@inject BackupService Backups
+@inject SettingsStore Settings
+@inject TenantAccess Access
+
+<PageTitle>Backups · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Backups</h1>
+    <p>Nightly copies of the server's configuration and the events, kept in the backup folder on the server's host.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @foreach (var problem in _problems)
+    {
+        <div class="alert alert-warning small" role="alert">@problem</div>
+    }
+
+    <div class="row g-3">
+        <div class="col-xl-7">
+            <section class="dg-panel mb-3">
+                <header>
+                    <h2>Recent backups</h2>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-link" @onclick="RefreshAsync">Refresh</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@Backups.IsRunning" @onclick="RunNow">
+                            @(Backups.IsRunning ? "Backing up…" : "Back up now")
+                        </button>
+                    </div>
+                </header>
+                <div class="dg-body">
+                    @if (_state.Runs.Count == 0)
+                    {
+                        <p class="small mb-0">No backups yet. The first runs at @_time.ToString("HH:mm", CultureInfo.InvariantCulture) (@_zone), or use <strong>Back up now</strong>.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead><tr><th>Started</th><th>Config</th><th>Events</th><th>Result</th></tr></thead>
+                                <tbody>
+                                    @foreach (var run in _state.Runs.Take(14))
+                                    {
+                                        <tr>
+                                            <td class="text-nowrap">@Local(run.StartedAt)@(run.Manual ? " (manual)" : "")</td>
+                                            <td class="small">@(run.ConfigFile is null ? "–" : Bytes(run.ConfigBytes))</td>
+                                            <td class="small">@(run.Events is null ? "–" : $"{(run.Events.Full ? "full" : "differential")}, {Bytes(run.Events.Bytes)}")</td>
+                                            <td class="small">
+                                                @if (run.Error is null)
+                                                {
+                                                    <span class="text-success">OK</span>
+                                                    @($" in {Duration(run)}")
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-danger">@run.Error</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    <Status Value="@_outcome" />
+                </div>
+            </section>
+
+            <section class="dg-panel">
+                <header><h2>On disk</h2></header>
+                <div class="dg-body">
+                    <h3 class="h6">Configuration <span class="small text-body-secondary fw-normal">@Backups.Options.ConfigDirectory</span></h3>
+                    @if (_configFiles.Count == 0)
+                    {
+                        <p class="small">None yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-unstyled small mb-3">
+                            @foreach (var f in _configFiles.Take(10))
+                            {
+                                <li><code>@f.Name</code> · @Bytes(f.Length)</li>
+                            }
+                            @if (_configFiles.Count > 10)
+                            {
+                                <li class="text-body-secondary">and @(_configFiles.Count - 10) older</li>
+                            }
+                        </ul>
+                    }
+                    <h3 class="h6">Events <span class="small text-body-secondary fw-normal">@Backups.Options.EventsDirectory</span></h3>
+                    @if (_state.EventBackups.Count == 0)
+                    {
+                        <p class="small mb-0">None yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-unstyled small mb-0">
+                            @foreach (var b in _state.EventBackups.OrderByDescending(b => b.At).Take(10))
+                            {
+                                <li><code>@b.Name</code> · @Bytes(b.Bytes)@(b.Base is null ? "" : $" · restores together with {b.Base}")</li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </section>
+        </div>
+
+        <div class="col-xl-5">
+            <section class="dg-panel mb-3">
+                <header><h2>Schedule</h2></header>
+                <div class="dg-body">
+                    <div class="form-check form-switch mb-3">
+                        <input id="enabled" class="form-check-input" type="checkbox" role="switch" @bind="_settings.Enabled" />
+                        <label class="form-check-label" for="enabled">Back up every night</label>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label small" for="time">At (@_zone)</label>
+                            <input id="time" type="time" class="form-control form-control-sm" @bind="_time" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small" for="keep">Keep for (days)</label>
+                            <input id="keep" type="number" min="1" max="3650" class="form-control form-control-sm" @bind="_settings.KeepDays" />
+                        </div>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input id="events" class="form-check-input" type="checkbox" @bind="_settings.IncludeEvents" />
+                        <label class="form-check-label" for="events">Include events</label>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 small mb-3">
+                        <label for="full">Full event backup every</label>
+                        <input id="full" type="number" min="1" max="90" class="form-control form-control-sm text-end" style="width: 5rem;" @bind="_settings.FullEveryDays" disabled="@(!_settings.IncludeEvents)" />
+                        <span>days</span>
+                    </div>
+                    <p class="small text-body-secondary">
+                        Between full backups, each night's event backup holds only what changed since the last full one, so restoring needs at most two files.
+                        A full backup is kept as long as a differential relies on it.
+                    </p>
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@_busy" @onclick="SaveAsync">Save</button>
+                    <Status Value="@_saveOutcome" />
+                </div>
+            </section>
+
+            <section class="dg-panel">
+                <header><h2>What's in a backup</h2></header>
+                <div class="dg-body small">
+                    <p>
+                        <strong>Configuration</strong> (<code>.dgsb</code>, encrypted with the backup passphrase): the agent certificate authority, the sign-in keys,
+                        and the whole PostgreSQL database: tenants, users, agents, alerts, dashboards and settings.
+                        Without the passphrase it can't be restored, so keep a copy of it in your password manager.
+                    </p>
+                    <p>
+                        <strong>Events</strong> (<code>.zip</code>, written by ClickHouse): every stored event, including any in cold storage.
+                        These aren't encrypted; the folder is readable only by the server and ClickHouse.
+                    </p>
+                    <p class="mb-0">
+                        The backup folder sits on the same machine as the server. Copy it somewhere else (another host, a NAS, offsite) for it to survive losing the server.
+                        To restore, see <code>docs/backups.md</code>.
+                    </p>
+                </div>
+            </section>
+        </div>
+    </div>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private sealed class SettingsForm
+    {
+        public bool Enabled { get; set; } = true;
+        public int KeepDays { get; set; } = 30;
+        public bool IncludeEvents { get; set; } = true;
+        public int FullEveryDays { get; set; } = 7;
+    }
+
+    private UserAccess? _access;
+    private SettingsForm _settings = new();
+    private TimeOnly _time = new(3, 15);
+    private BackupState _state = BackupState.Empty;
+    private IReadOnlyList<FileInfo> _configFiles = [];
+    private IReadOnlyList<string> _problems = [];
+    private TimeZoneInfo _zoneInfo = TimeZoneInfo.Utc;
+    private string _zone = "UTC";
+    private bool _busy;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _outcome;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _saveOutcome;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        var saved = await Backups.GetSettingsAsync(CancellationToken.None);
+        _settings = new SettingsForm { Enabled = saved.Enabled, KeepDays = saved.KeepDays, IncludeEvents = saved.IncludeEvents, FullEveryDays = saved.FullEveryDays };
+        _time = TimeOnly.ParseExact(saved.Time, "HH:mm", CultureInfo.InvariantCulture);
+        _zoneInfo = (await Settings.GetGeneralAsync(CancellationToken.None)).Zone;
+        _zone = _zoneInfo.Id;
+        await RefreshAsync();
+    }
+
+    private BackupSettings Build() => new(_settings.Enabled, _time.ToString("HH:mm", CultureInfo.InvariantCulture), _settings.KeepDays, _settings.IncludeEvents, _settings.FullEveryDays);
+
+    private async Task RefreshAsync()
+    {
+        _state = await Backups.GetStateAsync(CancellationToken.None);
+        _configFiles = Backups.ListConfigBackups();
+        _problems = await Backups.CheckAsync(Build(), CancellationToken.None);
+    }
+
+    private void RunNow()
+    {
+        if (_access?.IsGlobalAdmin != true || Backups.IsRunning)
+        {
+            return;
+        }
+        // Event backups of a big table take a while: run in the background and report when done.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var run = await Backups.RunAsync(manual: true, CancellationToken.None);
+                _outcome = run.Error is null ? new(true, $"Backed up: {run.ConfigFile}{(run.Events is null ? "" : $" and {run.Events.Name}")}.") : new(false, run.Error);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _outcome = new(false, ex.Message);
+            }
+            await InvokeAsync(async () =>
+            {
+                await RefreshAsync();
+                StateHasChanged();
+            });
+        });
+        _outcome = new(true, "Backing up in the background. This page updates when it's done.");
+        _ = Task.Delay(300).ContinueWith(_ => InvokeAsync(StateHasChanged), TaskScheduler.Default);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        try
+        {
+            await Backups.SaveSettingsAsync(Build(), CancellationToken.None);
+            var next = BackupService.NextRun(Build(), _zoneInfo, DateTimeOffset.UtcNow);
+            _saveOutcome = new(true, _settings.Enabled ? $"Saved. Next backup {Local(next)}." : "Saved. Nightly backups are off.");
+            _problems = await Backups.CheckAsync(Build(), CancellationToken.None);
+        }
+        catch (AdminException ex)
+        {
+            _saveOutcome = new(false, ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string Local(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, _zoneInfo).ToString("ddd d MMM HH:mm", CultureInfo.InvariantCulture);
+
+    private static string Duration(BackupRun run)
+    {
+        var d = (run.FinishedAt ?? run.StartedAt) - run.StartedAt;
+        return d.TotalMinutes >= 1 ? $"{d.TotalMinutes:0} min" : $"{Math.Max(1, d.TotalSeconds):0} s";
+    }
+
+    private static string Bytes(long bytes) => bytes switch
+    {
+        >= 1L << 40 => $"{bytes / (double)(1L << 40):0.0} TB",
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.0} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.0} MB",
+        >= 1L << 10 => $"{bytes / 1024d:0} KB",
+        _ => $"{bytes} B",
+    };
+}

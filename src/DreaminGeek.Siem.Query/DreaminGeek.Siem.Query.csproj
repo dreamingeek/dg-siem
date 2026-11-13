@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DreaminGeek.Siem.Query</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DreaminGeek.Siem.Core\DreaminGeek.Siem.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,11 @@
+# Installs a DG SIEM agent update. Root fetches the new version from the server itself (mTLS with the agent's
+# certificate) and checks its SHA-256 and --version before replacing /usr/local/bin/dg-siem-agent, so the
+# unprivileged agent can ask for an update but never supplies what root installs.
+[Unit]
+Description=Install a DG SIEM agent update
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dg-siem-agent self-update
+TimeoutStartSec=10min

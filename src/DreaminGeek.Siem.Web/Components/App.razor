@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <script>
+        // Dark by default; remembers the user's choice. Re-applied after enhanced navigation.
+        window.dgApplyTheme = function () {
+            var t = null;
+            try { t = localStorage.getItem("dg-theme"); } catch (e) { }
+            document.documentElement.setAttribute("data-bs-theme", t === "light" ? "light" : "dark");
+        };
+        window.dgToggleTheme = function () {
+            var next = document.documentElement.getAttribute("data-bs-theme") === "light" ? "dark" : "light";
+            try { localStorage.setItem("dg-theme", next); } catch (e) { }
+            dgApplyTheme();
+            window.dispatchEvent(new Event("dg-theme"));
+        };
+        dgApplyTheme();
+    </script>
+    <base href="/" />
+    <ResourcePreloader />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
+    <link rel="stylesheet" href="@Assets["lib/gridstack/gridstack.min.css"]" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["dg-siem-server.styles.css"]" />
+    <ImportMap />
+    <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/png" sizes="64x64" href="favicon.png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <HeadOutlet />
+</head>
+
+<body>
+    <Routes />
+    <ReconnectModal />
+    <script src="@Assets["lib/echarts/echarts.min.js"]"></script>
+    <script src="@Assets["lib/gridstack/gridstack-all.js"]"></script>
+    <script src="@Assets["js/assist.js"]"></script>
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script>Blazor.addEventListener("enhancedload", dgApplyTheme);</script>
+</body>
+
+</html>

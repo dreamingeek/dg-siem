@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DreaminGeek.Siem.Ingest</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DreaminGeek.Siem.Core\DreaminGeek.Siem.Core.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Parsers\DreaminGeek.Siem.Parsers.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Storage.ClickHouse\DreaminGeek.Siem.Storage.ClickHouse.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MaxMind.Db" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+</Project>

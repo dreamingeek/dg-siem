@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DreaminGeek.Siem.Alerting</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DreaminGeek.Siem.Core\DreaminGeek.Siem.Core.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Query\DreaminGeek.Siem.Query.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Storage.ClickHouse\DreaminGeek.Siem.Storage.ClickHouse.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Data\DreaminGeek.Siem.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Data protection (encrypted settings) and IHttpClientFactory. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DreaminGeek.Siem.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MailKit" />
+    <PackageReference Include="Cronos" />
+  </ItemGroup>
+
+</Project>

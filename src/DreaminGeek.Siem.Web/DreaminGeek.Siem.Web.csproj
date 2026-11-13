@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>DreaminGeek.Siem.Web</RootNamespace>
+    <AssemblyName>dg-siem-server</AssemblyName>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DreaminGeek.Siem.Core\DreaminGeek.Siem.Core.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Data\DreaminGeek.Siem.Data.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Ingest\DreaminGeek.Siem.Ingest.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Query\DreaminGeek.Siem.Query.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Storage.ClickHouse\DreaminGeek.Siem.Storage.ClickHouse.csproj" />
+    <ProjectReference Include="..\DreaminGeek.Siem.Alerting\DreaminGeek.Siem.Alerting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="QRCoder" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Certificate" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Install scripts and units put into the agent packages the server builds (AgentPackageStore). -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\deploy\agent\install.sh" LogicalName="agent/install.sh" />
+    <EmbeddedResource Include="..\..\deploy\agent\install.ps1" LogicalName="agent/install.ps1" />
+    <EmbeddedResource Include="..\..\deploy\agent\dg-siem-agent.service" LogicalName="agent/dg-siem-agent.service" />
+    <EmbeddedResource Include="..\..\deploy\agent\dg-siem-agent-update.service" LogicalName="agent/dg-siem-agent-update.service" />
+    <EmbeddedResource Include="..\..\deploy\agent\dg-siem-agent-update.path" LogicalName="agent/dg-siem-agent-update.path" />
+    <EmbeddedResource Include="..\..\LICENSE" LogicalName="agent/LICENSE" />
+  </ItemGroup>
+
+</Project>

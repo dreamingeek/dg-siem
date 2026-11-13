@@ -1,0 +1,20 @@
+@* The sign-in card shared by the password, authenticator and recovery-code pages. *@
+<div class="dg-auth">
+    <img class="dg-auth-logo" src="brand/dg-siem-logo.png" alt="DG SIEM: Security Information and Event Management" width="960" height="310" />
+    <div class="dg-panel">
+        <div class="dg-body p-4">
+            <h1 class="mb-3">@Title</h1>
+            @if (Error is not null)
+            {
+                <div class="alert alert-danger py-2 small" role="alert">@Error</div>
+            }
+            @ChildContent
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

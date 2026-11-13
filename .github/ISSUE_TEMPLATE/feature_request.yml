@@ -1,0 +1,17 @@
+name: Feature or new log source
+description: Something DG SIEM should do, or a device or app it should parse.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: The problem it solves for you. For a new log source, the product and version.
+    validations:
+      required: true
+  - type: textarea
+    id: samples
+    attributes:
+      label: Sample log lines (for a new source)
+      description: A few real lines, with addresses, names and hostnames replaced.
+      render: text

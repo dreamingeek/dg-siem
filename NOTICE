@@ -1,0 +1,28 @@
+DG SIEM
+Copyright 2026 Dreamin Geek LLC
+
+This product includes software developed by Dreamin Geek LLC (https://dreamingeek.com).
+
+The Apache License covers the source code. It doesn't grant rights to the "DG SIEM" name or logo
+(docs/images, src/DreaminGeek.Siem.Web/wwwroot/brand): you may use them to refer to this project,
+but not as the name or logo of a fork or a product of your own.
+
+Splunk is a trademark of Splunk LLC; Elastic Common Schema and ECS are Elasticsearch B.V. projects.
+DG SIEM isn't affiliated with or endorsed by either. Mentions of Splunk describe compatibility
+(the HTTP Event Collector protocol) and the familiar style of the search language.
+
+Third-party components bundled in src/DreaminGeek.Siem.Web/wwwroot/lib:
+- Apache ECharts (Apache License 2.0), https://echarts.apache.org
+- Bootstrap (MIT License), https://getbootstrap.com
+- gridstack.js 14.0.0 (MIT License), https://gridstackjs.com
+- World map outlines from Natural Earth (public domain) via world-atlas 2.0.2 (ISC License),
+  with ISO 3166 country codes from i18n-iso-countries 7.14.0 (MIT License)
+Each library's license is in its folder.
+
+NuGet packages used by the server include MaxMind.Db (Apache License 2.0), QRCoder (MIT), MailKit (MIT),
+Cronos (MIT), ClickHouse.Driver (Apache License 2.0) and Npgsql (PostgreSQL License).
+
+GeoIP: when DB-IP Lite is selected, DG SIEM downloads "IP Geolocation by DB-IP" (https://db-ip.com),
+licensed under CC BY 4.0, and credits it on the GeoIP page and map panels. GeoLite2 data is created by
+MaxMind (https://www.maxmind.com) and used under its GeoLite2 EULA when that source is selected.
+Neither database is included in this repository.

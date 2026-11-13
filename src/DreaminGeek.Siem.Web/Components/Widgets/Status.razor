@@ -1,0 +1,9 @@
+@* The outcome of the last action on a form. *@
+@if (Value is not null)
+{
+    <span class="dg-status small @(Value.Ok ? "dg-status-ok" : "dg-status-bad")" role="@(Value.Ok ? "status" : "alert")">@Value.Message</span>
+}
+
+@code {
+    [Parameter] public Outcome? Value { get; set; }
+}

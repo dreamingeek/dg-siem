@@ -1,0 +1,28 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@* Interactive pages keep the rights they opened with. The server re-checks the account every minute
+   (RevalidatingIdentityStateProvider); when it fails (user deleted, locked, or their access changed),
+   this reloads the page so they sign in again. Renders nothing. *@
+
+@code {
+    protected override void OnInitialized() => AuthProvider.AuthenticationStateChanged += OnChanged;
+
+    private async void OnChanged(Task<AuthenticationState> state)
+    {
+        try
+        {
+            if ((await state).User.Identity?.IsAuthenticated != true)
+            {
+                await InvokeAsync(() => Nav.NavigateTo("account/login?returnUrl=" + Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri)), forceLoad: true));
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // The circuit closed meanwhile; nothing to protect.
+        }
+    }
+
+    public void Dispose() => AuthProvider.AuthenticationStateChanged -= OnChanged;
+}

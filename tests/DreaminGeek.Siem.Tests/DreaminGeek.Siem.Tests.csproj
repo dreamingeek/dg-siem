@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DreaminGeek.Siem.Core\DreaminGeek.Siem.Core.csproj" />
+    <ProjectReference Include="..\..\src\DreaminGeek.Siem.Parsers\DreaminGeek.Siem.Parsers.csproj" />
+    <ProjectReference Include="..\..\src\DreaminGeek.Siem.Query\DreaminGeek.Siem.Query.csproj" />
+    <ProjectReference Include="..\..\src\DreaminGeek.Siem.Agent\DreaminGeek.Siem.Agent.csproj" />
+    <ProjectReference Include="..\..\src\DreaminGeek.Siem.Web\DreaminGeek.Siem.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="TestData\*.mmdb" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

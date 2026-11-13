@@ -1,0 +1,16 @@
+# LEGACY: set the cold-tier bucket up under Administration > Storage instead (docs/storage.md).
+# Kept so existing setups keep working until they move to the UI.
+# Cold tier on S3-compatible storage (Backblaze B2, Wasabi, MinIO...). Enable it in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.s3.yml
+#   DGSIEM_S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com/my-bucket/dg-siem/
+#   DGSIEM_S3_ACCESS_KEY_ID=...
+#   DGSIEM_S3_SECRET_ACCESS_KEY=...
+# then `docker compose up -d` and turn on cold storage under Administration > Storage. See docs/storage.md.
+services:
+  clickhouse:
+    environment:
+      DGSIEM_S3_ENDPOINT: ${DGSIEM_S3_ENDPOINT:?set DGSIEM_S3_ENDPOINT in .env}
+      DGSIEM_S3_ACCESS_KEY_ID: ${DGSIEM_S3_ACCESS_KEY_ID:?set DGSIEM_S3_ACCESS_KEY_ID in .env}
+      DGSIEM_S3_SECRET_ACCESS_KEY: ${DGSIEM_S3_SECRET_ACCESS_KEY:?set DGSIEM_S3_SECRET_ACCESS_KEY in .env}
+    volumes:
+      - ./clickhouse/storage-s3.xml:/etc/clickhouse-server/config.d/dg-siem-storage-s3.xml:ro

@@ -1,0 +1,390 @@
+@page "/admin/notifications"
+@rendermode InteractiveServer
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Alerts
+@using DreaminGeek.Siem.Web.Security
+@inject AlertAdminService Alerts
+@inject TenantAccess Access
+
+<PageTitle>Notifications · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Notifications</h1>
+    <p>Where alerts go: email through your SMTP relay, and tickets in AlgaPSA filed under each tenant's client.</p>
+</div>
+
+<AdminOnly Access="_access">
+    <section class="dg-panel mb-3">
+        <header><h2>General</h2></header>
+        <div class="dg-body">
+            <form class="row g-2 align-items-end" @onsubmit="SaveGeneralAsync" @onsubmit:preventDefault>
+                <div class="col-md-5">
+                    <label class="form-label small" for="gurl">DG SIEM address for links in alerts</label>
+                    <input id="gurl" class="form-control form-control-sm" @bind="_publicUrl" placeholder="https://dg-siem.corp.example.com" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small" for="gtz">Time zone for schedules and alert times</label>
+                    <select id="gtz" class="form-select form-select-sm" @bind="_timeZone">
+                        @foreach (var id in _zones)
+                        {
+                            <option value="@id">@id</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-sm btn-primary" type="submit">Save</button>
+                    <Status Value="@_generalStatus" />
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <section class="dg-panel mb-3">
+        <header><h2>Email</h2><span class="small text-body-secondary">SMTP relay</span></header>
+        <div class="dg-body">
+            <form class="row g-2 align-items-end" @onsubmit="SaveSmtpAsync" @onsubmit:preventDefault>
+                <div class="col-md-4">
+                    <label class="form-label small" for="shost">Relay host</label>
+                    <input id="shost" class="form-control form-control-sm" @bind="_smtpHost" placeholder="smtp.example.com" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small" for="sport">Port</label>
+                    <input id="sport" type="number" class="form-control form-control-sm" @bind="_smtpPort" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small" for="ssec">Encryption</label>
+                    <select id="ssec" class="form-select form-select-sm" @bind="_smtpSecurity">
+                        <option value="@SmtpSecurity.Auto">Automatic (STARTTLS if offered)</option>
+                        <option value="@SmtpSecurity.StartTls">STARTTLS required</option>
+                        <option value="@SmtpSecurity.SslOnConnect">TLS from the start (465)</option>
+                        <option value="@SmtpSecurity.None">None</option>
+                    </select>
+                </div>
+                <div class="col-md-3"></div>
+                <div class="col-md-4">
+                    <label class="form-label small" for="suser">Username <span class="text-body-secondary">(blank if the relay allows this server by IP)</span></label>
+                    <input id="suser" class="form-control form-control-sm" @bind="_smtpUser" autocomplete="off" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small" for="spass">Password</label>
+                    <input id="spass" type="password" class="form-control form-control-sm" @bind="_smtpPassword" autocomplete="new-password"
+                           placeholder="@(_smtpHasPassword && !_smtpClearPassword ? "Saved; leave blank to keep" : "")" />
+                    @if (_smtpHasPassword)
+                    {
+                        <div class="form-check mt-1">
+                            <input id="sclear" type="checkbox" class="form-check-input" @bind="_smtpClearPassword" />
+                            <label class="form-check-label small" for="sclear">Remove the saved password</label>
+                        </div>
+                    }
+                </div>
+                <div class="col-md-4"></div>
+                <div class="col-md-4">
+                    <label class="form-label small" for="sfrom">From address</label>
+                    <input id="sfrom" type="email" class="form-control form-control-sm" @bind="_smtpFrom" placeholder="dg-siem@example.com" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small" for="sname">From name</label>
+                    <input id="sname" class="form-control form-control-sm" @bind="_smtpFromName" />
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-sm btn-primary" type="submit">Save</button>
+                    <Status Value="@_smtpStatus" />
+                </div>
+            </form>
+            <form class="d-flex gap-2 align-items-center mt-3 flex-wrap" @onsubmit="TestEmailAsync" @onsubmit:preventDefault>
+                <label class="small" for="stest">Send a test to</label>
+                <input id="stest" type="email" class="form-control form-control-sm" style="max-width: 18rem;" @bind="_testTo" />
+                <button class="btn btn-sm btn-outline-secondary" type="submit" disabled="@_sending">@(_sending ? "Sending…" : "Send test")</button>
+                <Status Value="@_testStatus" />
+            </form>
+        </div>
+    </section>
+
+    <section class="dg-panel mb-3">
+        <header><h2>AlgaPSA tickets</h2></header>
+        <div class="dg-body">
+            <form class="row g-2 align-items-end" @onsubmit="SavePsaConnectionAsync" @onsubmit:preventDefault>
+                <div class="col-md-5">
+                    <label class="form-label small" for="purl">AlgaPSA address</label>
+                    <input id="purl" class="form-control form-control-sm" @bind="_psaUrl" placeholder="https://psa.example.com" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small" for="pkey">API key</label>
+                    <input id="pkey" type="password" class="form-control form-control-sm" @bind="_psaKey" autocomplete="new-password"
+                           placeholder="@(_psaHasKey ? "Saved; leave blank to keep" : "From your AlgaPSA profile → API keys")" />
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-sm btn-primary" type="submit" disabled="@_loadingPsa">@(_loadingPsa ? "Connecting…" : "Save and connect")</button>
+                </div>
+                <div class="col-12"><Status Value="@_psaStatus" /></div>
+            </form>
+
+            @if (_boards.Count > 0)
+            {
+                <form class="row g-2 align-items-end mt-2" @onsubmit="SavePsaDefaultsAsync" @onsubmit:preventDefault>
+                    <div class="col-md-4">
+                        <label class="form-label small" for="pboard">Default board</label>
+                        <select id="pboard" class="form-select form-select-sm" @bind="_defaultBoard">
+                            <option value="">Choose…</option>
+                            @foreach (var b in _boards)
+                            {
+                                <option value="@b.Id">@b.Name</option>
+                            }
+                        </select>
+                    </div>
+                    @foreach (var severity in Enum.GetValues<AlertSeverity>())
+                    {
+                        var s = severity;
+                        <div class="col-md-2">
+                            <label class="form-label small" for="@($"pp{s}")">Priority for @s</label>
+                            <select id="@($"pp{s}")" class="form-select form-select-sm" value="@_priorityBySeverity.GetValueOrDefault(s)"
+                                    @onchange="e => _priorityBySeverity[s] = e.Value?.ToString() ?? string.Empty">
+                                <option value="">Choose…</option>
+                                @foreach (var p in _priorities)
+                                {
+                                    <option value="@p.Id">@p.Name</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    <div class="col-12">
+                        <button class="btn btn-sm btn-primary" type="submit">Save</button>
+                        <Status Value="@_defaultsStatus" />
+                    </div>
+                </form>
+
+                <h3 class="dg-subhead mt-4">Tenants</h3>
+                <p class="small text-body-secondary">Each tenant's alert tickets are filed under its client. Leave the board on default unless a client's tickets belong elsewhere.</p>
+                <form @onsubmit="SaveMappingsAsync" @onsubmit:preventDefault>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead><tr><th>Tenant</th><th>AlgaPSA client</th><th>Board</th></tr></thead>
+                            <tbody>
+                                @foreach (var m in _mappings)
+                                {
+                                    var row = m;
+                                    <tr>
+                                        <td>@row.Slug <span class="small text-body-secondary">@row.Name</span></td>
+                                        <td>
+                                            <select class="form-select form-select-sm" aria-label="@($"AlgaPSA client for {row.Slug}")" value="@row.ClientId"
+                                                    @onchange="e => row.ClientId = e.Value?.ToString()">
+                                                <option value="">No tickets</option>
+                                                @foreach (var c in _clients)
+                                                {
+                                                    <option value="@c.Id">@c.Name</option>
+                                                }
+                                            </select>
+                                        </td>
+                                        <td>
+                                            <select class="form-select form-select-sm" aria-label="@($"Board for {row.Slug}")" value="@row.BoardId"
+                                                    @onchange="e => row.BoardId = e.Value?.ToString()">
+                                                <option value="">Default board</option>
+                                                @foreach (var b in _boards)
+                                                {
+                                                    <option value="@b.Id">@b.Name</option>
+                                                }
+                                            </select>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <button class="btn btn-sm btn-primary" type="submit">Save tenants</button>
+                    <Status Value="@_mappingStatus" />
+                </form>
+            }
+            else if (_psaHasKey && _psaUrl.Length > 0 && !_loadingPsa)
+            {
+                <p class="small text-body-secondary mt-2 mb-0">Connect to choose the board, priorities and each tenant's client.</p>
+            }
+        </div>
+    </section>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<string> _zones = [];
+
+    private string _publicUrl = string.Empty;
+    private string _timeZone = "UTC";
+    private Outcome? _generalStatus;
+
+    private string _smtpHost = string.Empty;
+    private int _smtpPort = 25;
+    private SmtpSecurity _smtpSecurity;
+    private string _smtpUser = string.Empty;
+    private string _smtpPassword = string.Empty;
+    private bool _smtpHasPassword;
+    private bool _smtpClearPassword;
+    private string _smtpFrom = string.Empty;
+    private string _smtpFromName = "DG SIEM";
+    private Outcome? _smtpStatus;
+    private string _testTo = string.Empty;
+    private bool _sending;
+    private Outcome? _testStatus;
+
+    private string _psaUrl = string.Empty;
+    private string _psaKey = string.Empty;
+    private bool _psaHasKey;
+    private bool _loadingPsa;
+    private Outcome? _psaStatus;
+    private IReadOnlyList<PsaRef> _boards = [];
+    private IReadOnlyList<PsaRef> _clients = [];
+    private IReadOnlyList<PsaRef> _priorities = [];
+    private string _defaultBoard = string.Empty;
+    private readonly Dictionary<AlertSeverity, string> _priorityBySeverity = [];
+    private Outcome? _defaultsStatus;
+    private List<MappingRow> _mappings = [];
+    private Outcome? _mappingStatus;
+
+    private sealed class MappingRow
+    {
+        public Guid TenantId { get; init; }
+        public string Slug { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public string? ClientId { get; set; }
+        public string? BoardId { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _zones = TimeZoneInfo.GetSystemTimeZones().Select(z => z.Id).Append("UTC").Distinct().Order(StringComparer.Ordinal).ToList();
+        var (general, smtp, psa) = await Alerts.GetSettingsAsync(_access, CancellationToken.None);
+
+        _publicUrl = general.PublicUrl ?? string.Empty;
+        _timeZone = general.TimeZone;
+
+        _smtpHost = smtp.Host;
+        _smtpPort = smtp.Port;
+        _smtpSecurity = smtp.Security;
+        _smtpUser = smtp.Username ?? string.Empty;
+        _smtpHasPassword = !string.IsNullOrEmpty(smtp.Password);
+        _smtpFrom = smtp.FromAddress;
+        _smtpFromName = smtp.FromName ?? string.Empty;
+
+        _psaUrl = psa.BaseUrl;
+        _psaHasKey = !string.IsNullOrEmpty(psa.ApiKey);
+        _defaultBoard = psa.DefaultBoard?.Id ?? string.Empty;
+        foreach (var (severity, priority) in psa.Priorities)
+        {
+            _priorityBySeverity[severity] = priority.Id;
+        }
+        _mappings = (await Alerts.TenantMappingsAsync(_access, CancellationToken.None))
+            .Select(m => new MappingRow { TenantId = m.TenantId, Slug = m.Slug, Name = m.Name, ClientId = m.ClientId, BoardId = m.BoardId })
+            .ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Load AlgaPSA's lists once the page is up, so a slow PSA doesn't hold up the page.
+        if (firstRender && _access?.IsGlobalAdmin == true && _psaHasKey && _psaUrl.Length > 0)
+        {
+            await LoadPsaListsAsync();
+            StateHasChanged();
+        }
+    }
+
+    private async Task<Outcome> Try(Func<Task> action, string success)
+    {
+        try
+        {
+            await action();
+            return new Outcome(true, success);
+        }
+        catch (AdminException ex)
+        {
+            return new Outcome(false, ex.Message);
+        }
+    }
+
+    private async Task SaveGeneralAsync() =>
+        _generalStatus = await Try(() => Alerts.SaveGeneralAsync(_access!, new GeneralSettings(_publicUrl, _timeZone), CancellationToken.None), "Saved.");
+
+    private async Task SaveSmtpAsync()
+    {
+        string? password = _smtpClearPassword ? string.Empty : _smtpPassword.Length > 0 ? _smtpPassword : null;
+        _smtpStatus = await Try(() => Alerts.SaveSmtpAsync(_access!,
+            new SmtpSettings(_smtpHost, _smtpPort, _smtpSecurity, _smtpUser.Trim().Length == 0 ? null : _smtpUser.Trim(), password, _smtpFrom, _smtpFromName.Trim().Length == 0 ? null : _smtpFromName.Trim()),
+            CancellationToken.None), "Saved.");
+        if (_smtpStatus.Ok)
+        {
+            _smtpHasPassword = password is null ? _smtpHasPassword : password.Length > 0;
+            _smtpPassword = string.Empty;
+            _smtpClearPassword = false;
+        }
+    }
+
+    private async Task TestEmailAsync()
+    {
+        _sending = true;
+        _testStatus = await Try(() => Alerts.SendTestEmailAsync(_access!, _testTo, CancellationToken.None), $"Sent to {_testTo}. Check the inbox (and spam).");
+        _sending = false;
+    }
+
+    private async Task SavePsaConnectionAsync()
+    {
+        var current = (await Alerts.GetSettingsAsync(_access!, CancellationToken.None)).Psa;
+        var saved = await Try(() => Alerts.SavePsaAsync(_access!,
+            current with { BaseUrl = _psaUrl, ApiKey = _psaKey.Length > 0 ? _psaKey : null }, CancellationToken.None), "Saved.");
+        if (!saved.Ok)
+        {
+            _psaStatus = saved;
+            return;
+        }
+        _psaHasKey = _psaHasKey || _psaKey.Length > 0;
+        _psaKey = string.Empty;
+        await LoadPsaListsAsync();
+    }
+
+    private async Task LoadPsaListsAsync()
+    {
+        _loadingPsa = true;
+        try
+        {
+            (_boards, _clients, _priorities) = await Alerts.LoadPsaListsAsync(_access!, CancellationToken.None);
+            _psaStatus = new Outcome(true, $"Connected: {_boards.Count} boards, {_clients.Count} clients, {_priorities.Count} priorities.");
+        }
+        catch (AdminException ex)
+        {
+            _psaStatus = new Outcome(false, ex.Message);
+        }
+        finally
+        {
+            _loadingPsa = false;
+        }
+    }
+
+    private async Task SavePsaDefaultsAsync()
+    {
+        var current = (await Alerts.GetSettingsAsync(_access!, CancellationToken.None)).Psa;
+        var board = _boards.FirstOrDefault(b => b.Id == _defaultBoard);
+        var priorities = _priorityBySeverity
+            .Where(p => p.Value.Length > 0)
+            .Select(p => (p.Key, Ref: _priorities.FirstOrDefault(x => x.Id == p.Value)))
+            .Where(p => p.Ref is not null)
+            .ToDictionary(p => p.Key, p => p.Ref!);
+        var missing = Enum.GetValues<AlertSeverity>().Where(s => !priorities.ContainsKey(s)).ToList();
+        _defaultsStatus = await Try(() => Alerts.SavePsaAsync(_access!,
+            current with { ApiKey = null, DefaultBoard = board, Priorities = priorities }, CancellationToken.None),
+            board is null ? "Saved, but choose a default board or tickets can't be opened."
+            : missing.Count > 0 ? $"Saved. {string.Join(", ", missing)} alerts have no priority yet, so their tickets will fail."
+            : "Saved.");
+    }
+
+    private async Task SaveMappingsAsync() =>
+        _mappingStatus = await Try(() => Alerts.SaveTenantMappingsAsync(_access!, _mappings.Select(m => new TenantPsaMapping(
+            m.TenantId, m.Slug, m.Name,
+            m.ClientId, _clients.FirstOrDefault(c => c.Id == m.ClientId)?.Name,
+            m.BoardId, _boards.FirstOrDefault(b => b.Id == m.BoardId)?.Name)), CancellationToken.None), "Saved.");
+}

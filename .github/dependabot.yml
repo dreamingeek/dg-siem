@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: nuget            # versions live in Directory.Packages.props
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns: ["*"]
+    ignore:
+      # A new .NET major is a deliberate upgrade (TargetFramework, SDK, images), not a routine bump.
+      - dependency-name: "Microsoft.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "System.*"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: "/src/DreaminGeek.Siem.Web"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "dotnet/*"
+        update-types: ["version-update:semver-major"]

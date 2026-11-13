@@ -1,0 +1,106 @@
+# DG SIEM single-node stack: server + ClickHouse (events) + PostgreSQL (metadata).
+#   cp .env.example .env   # set passwords
+#   docker compose up -d --build
+# For production on Proxmox, point the ClickHouse volume at fast local storage (e.g. a local SSD or ZFS pool).
+
+name: dg-siem
+
+services:
+  # One-shot: creates the shared folders with the owners the other containers need (server uid 1654, ClickHouse uid 101).
+  dg-siem-init:
+    image: busybox:1.37
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /backups/config /backups/events
+        chown 1654:1654 /backups/config && chmod 700 /backups/config
+        chown 101:101 /backups/events && chmod 2770 /backups/events
+        chown 1654:101 /clickhouse-conf && chmod 2750 /clickhouse-conf
+    volumes:
+      - ${DGSIEM_BACKUP_DIR:-./backups}:/backups
+      - clickhouse-conf:/clickhouse-conf
+
+  dg-siem-server:
+    build:
+      context: ..
+      dockerfile: src/DreaminGeek.Siem.Web/Dockerfile
+    image: ghcr.io/dreamingeek/dg-siem-server:latest
+    restart: unless-stopped
+    depends_on:
+      dg-siem-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=dgsiem;Username=dgsiem;Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}"
+      ClickHouse__ConnectionString: "Host=clickhouse;Port=8123;Username=dgsiem;Password=${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD in .env (see .env.example)};Database=dgsiem"
+      ClickHouse__Database: dgsiem
+      # Hostname(s) agents use to reach port 8443. Must match the --server URL given to agents.
+      Pki__AgentHostnames__0: "${DGSIEM_AGENT_HOSTNAME:-localhost}"
+      # A second name or IP agents use, e.g. the LAN address (192.168.1.20) next to the public one.
+      Pki__AgentHostnames__1: "${DGSIEM_AGENT_HOSTNAME_INTERNAL:-}"
+      # Encrypts the nightly config backups. Keep a copy in your password manager: without it they can't be restored.
+      Backup__Passphrase: "${DGSIEM_BACKUP_PASSPHRASE:-}"
+    volumes:
+      - dg-siem-data:/var/lib/dg-siem   # agent CA + server cert (included in the nightly config backup)
+      # Nightly backups (Administration > Backups): config/ written by the server, events/ by ClickHouse. See docs/backups.md.
+      - ${DGSIEM_BACKUP_DIR:-./backups}:/backups
+      # ClickHouse config the server writes (the cold-storage bucket from Administration > Storage).
+      - clickhouse-conf:/var/lib/dg-siem-clickhouse
+    # ClickHouse's group, so the server can prune old event backups and ClickHouse can read the config it writes.
+    group_add: ["101"]
+    ports:
+      - "${DGSIEM_HTTP_PORT:-8080}:8080"    # web UI
+      - "${DGSIEM_AGENT_PORT:-8443}:8443"   # agents (mTLS) - forward as raw TCP, never TLS-terminate
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    restart: unless-stopped
+    depends_on:
+      dg-siem-init:
+        condition: service_completed_successfully
+    environment:
+      CLICKHOUSE_DB: dgsiem
+      CLICKHOUSE_USER: dgsiem
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"   # lets the server create per-tenant row policies (Phase 2)
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+      - ${DGSIEM_BACKUP_DIR:-./backups}/events:/backups
+      - ./clickhouse/backups.xml:/etc/clickhouse-server/config.d/dg-siem-backups.xml:ro
+      - clickhouse-conf:/etc/clickhouse-server/conf.d:ro   # written by the server; reloaded without a restart
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dgsiem
+      POSTGRES_USER: dgsiem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dgsiem -d dgsiem"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dg-siem-data:
+  clickhouse-conf:
+  clickhouse-data:
+  clickhouse-logs:
+  postgres-data:

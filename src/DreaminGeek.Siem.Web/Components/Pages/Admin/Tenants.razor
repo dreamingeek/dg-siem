@@ -1,0 +1,103 @@
+@page "/admin/tenants"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Security
+@inject AdminService Admin
+@inject TenantAccess Access
+
+<PageTitle>Tenants · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Tenants</h1>
+    <p>One per client site (and one for your own network). Every event belongs to exactly one tenant.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+
+    <section class="dg-panel mb-3">
+        <header><h2>Add a tenant</h2></header>
+        <div class="dg-body">
+            <form class="row g-2 align-items-end" @onsubmit="AddAsync" @onsubmit:preventDefault>
+                <div class="col-sm-2">
+                    <label class="form-label small" for="slug">Tenant ID</label>
+                    <input id="slug" class="form-control form-control-sm" placeholder="acme" @bind="_slug" maxlength="32" />
+                </div>
+                <div class="col-sm-4">
+                    <label class="form-label small" for="tname">Name</label>
+                    <input id="tname" class="form-control form-control-sm" placeholder="Client name" @bind="_name" />
+                </div>
+                <div class="col-sm-auto">
+                    <button class="btn btn-sm btn-primary" type="submit">Add tenant</button>
+                </div>
+            </form>
+            <p class="small text-body-secondary mt-2 mb-0">
+                The ID is permanent: lowercase letters, digits and dashes, matching your naming prefix (dg, acme, globex).
+            </p>
+        </div>
+    </section>
+
+    <section class="dg-panel">
+        <div class="table-responsive">
+            <table class="table">
+                <thead><tr><th>ID</th><th>Name</th><th class="num">Agents</th><th class="num">Users</th><th>Created</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var t in _tenants)
+                    {
+                        <tr>
+                            <td>@t.Slug</td>
+                            <td>@t.Name</td>
+                            <td class="num">@t.Agents</td>
+                            <td class="num">@t.Users</td>
+                            <td>@t.CreatedAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</td>
+                            <td class="text-end"><a href="@($"search?q=*&tenant={t.Slug}")">Search events</a></td>
+                        </tr>
+                    }
+                    @if (_tenants.Count == 0)
+                    {
+                        <tr><td colspan="6" class="text-body-secondary">No tenants yet. Add one above, then enroll an agent for it.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<TenantSummary> _tenants = [];
+    private string _slug = string.Empty;
+    private string _name = string.Empty;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin == true)
+        {
+            _tenants = await Admin.ListTenantsAsync(_access, CancellationToken.None);
+        }
+    }
+
+    private async Task AddAsync()
+    {
+        _error = null;
+        try
+        {
+            await Admin.AddTenantAsync(_access, _slug, _name, CancellationToken.None);
+            _slug = _name = string.Empty;
+            _tenants = await Admin.ListTenantsAsync(_access!, CancellationToken.None);
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

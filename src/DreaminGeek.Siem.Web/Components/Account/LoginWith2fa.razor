@@ -1,0 +1,75 @@
+@page "/account/login-2fa"
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Security
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@attribute [AllowAnonymous]
+@layout DreaminGeek.Siem.Web.Components.Layout.EmptyLayout
+@inject SignInManager<SiemUser> SignIn
+@inject NavigationManager Nav
+
+<PageTitle>Two-factor code · DG SIEM</PageTitle>
+
+<AuthCard Title="Enter your code" Error="@_error">
+    <p class="small text-body-secondary">Open your authenticator app and enter the 6-digit code for DG SIEM.</p>
+    <EditForm Model="Input!" method="post" OnSubmit="VerifyAsync" FormName="login-2fa">
+        <div class="mb-3">
+            <label for="code" class="form-label">Code</label>
+            <InputText id="code" class="form-control dg-otp" @bind-Value="Input!.Code" autocomplete="one-time-code" inputmode="numeric" maxlength="7" autofocus />
+        </div>
+        <div class="form-check mb-3">
+            <InputCheckbox id="remember" class="form-check-input" @bind-Value="Input!.RememberBrowser" />
+            <label class="form-check-label small" for="remember">Don't ask again on this browser for 14 days</label>
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Verify</button>
+    </EditForm>
+    <p class="small mt-4 mb-0">
+        Lost your phone? <a href="@($"/account/login-recovery{ReturnUrls.Query(ReturnUrl)}")">Use a recovery code</a>.
+    </p>
+</AuthCard>
+
+@code {
+    [SupplyParameterFromForm]
+    private CodeInput? Input { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Input ??= new CodeInput();
+        // Only reachable straight after a correct password.
+        if (await SignIn.GetTwoFactorAuthenticationUserAsync() is null)
+        {
+            Nav.NavigateTo($"/account/login{ReturnUrls.Query(ReturnUrl)}", forceLoad: true);
+        }
+    }
+
+    private async Task VerifyAsync()
+    {
+        var code = TwoFactor.CleanCode(Input!.Code);
+        if (code.Length == 0)
+        {
+            _error = "Enter the code from your authenticator app.";
+            return;
+        }
+        var result = await SignIn.TwoFactorAuthenticatorSignInAsync(code, isPersistent: false, rememberClient: Input.RememberBrowser);
+        if (result.Succeeded)
+        {
+            Nav.NavigateTo(ReturnUrls.Safe(ReturnUrl), forceLoad: true);
+            return;
+        }
+        _error = result.IsLockedOut
+            ? "Too many attempts. Try again in 15 minutes."
+            : "That code didn't work. Codes change every 30 seconds; check your phone's clock is set automatically.";
+        Input.Code = string.Empty;
+    }
+
+    private sealed class CodeInput
+    {
+        public string Code { get; set; } = string.Empty;
+        public bool RememberBrowser { get; set; }
+    }
+}

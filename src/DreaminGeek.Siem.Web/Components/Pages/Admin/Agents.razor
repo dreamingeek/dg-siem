@@ -1,0 +1,378 @@
+@page "/admin/agents"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Security
+@inject AdminService Admin
+@inject AgentHealth Health
+@inject TenantAccess Access
+@inject IConfiguration Config
+@inject AgentPackageStore Packages
+
+<PageTitle>Agents · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Agents</h1>
+    <p>Collectors at each site. They pull their inputs from here and ship logs over mTLS.</p>
+    @if (_access?.IsGlobalAdmin == true)
+    {
+        <button type="button" class="btn btn-sm btn-primary ms-auto" @onclick="() => { _enrolling = !_enrolling; _token = null; _error = null; }">
+            @(_enrolling ? "Close" : "Enroll an agent")
+        </button>
+    }
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+
+    @if (_enrolling)
+    {
+        <section class="dg-panel mb-3">
+            <header><h2>Enroll an agent</h2><span class="dg-aside">The token works once and expires</span></header>
+            <div class="dg-body">
+                @if (_token is null)
+                {
+                    <form class="row g-2 align-items-end" @onsubmit="CreateTokenAsync" @onsubmit:preventDefault>
+                        <div class="col-sm-3">
+                            <label class="form-label small" for="tenant">Tenant</label>
+                            <select id="tenant" class="form-select form-select-sm" @bind="_tenant">
+                                @foreach (var t in _tenants)
+                                {
+                                    <option value="@t.Slug">@t.Slug (@t.Name)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-sm-3">
+                            <label class="form-label small" for="name">Agent name</label>
+                            <input id="name" class="form-control form-control-sm" placeholder="e.g. acme-log-col" @bind="_agentName" />
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small" for="hours">Valid for</label>
+                            <select id="hours" class="form-select form-select-sm" @bind="_hours">
+                                <option value="1">1 hour</option>
+                                <option value="24">24 hours</option>
+                                <option value="72">3 days</option>
+                                <option value="168">7 days</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-auto">
+                            <button class="btn btn-sm btn-primary" type="submit" disabled="@(_tenants.Count == 0)">Create token</button>
+                        </div>
+                    </form>
+                    @if (_tenants.Count == 0)
+                    {
+                        <p class="small text-body-secondary mt-2 mb-0">Add a tenant first on the <a href="admin/tenants">Tenants</a> page.</p>
+                    }
+                }
+                else
+                {
+                    var latest = AgentPackageStore.Platforms.Select(Packages.Latest).OfType<AgentPackage>().ToList();
+                    @if (latest.Count > 0)
+                    {
+                        <p class="small mb-2">
+                            Run the one for the machine. It downloads the agent from this server, checks it against the SHA-256 in the command, and installs it.
+                            The token enrolls one agent; until then it also lets this command upgrade existing agents older than 0.4.0. It won't be shown again.
+                        </p>
+                        @foreach (var package in latest)
+                        {
+                            var id = $"install-{package.Platform}";
+                            <label class="form-label small mb-1" for="@id">@AgentUpdates.PlatformName(package.Platform) (@package.Version)@(package.IsWindows ? ", in an Administrator PowerShell" : ", as root")</label>
+                            <div class="input-group input-group-sm mb-2">
+                                <input id="@id" class="form-control dg-query" readonly value="@OneLiner(package)" />
+                                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value); this.textContent='Copied';">Copy</button>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <p class="small mb-2">
+                            Upload an agent version on <a href="admin/agent-updates">Agent updates</a> for a one-line install. Until then, copy the package to the machine and run this from the unpacked folder.
+                            The token works once and won't be shown again.
+                        </p>
+                    }
+                    <details class="small mb-2" open="@(latest.Count == 0)">
+                    <summary class="mb-1">From a package copied to the machine</summary>
+                    <label class="form-label small mb-1" for="install-linux">Linux collector (Debian/Ubuntu LXC, Raspberry Pi), as root</label>
+                    <div class="input-group input-group-sm mb-2">
+                        <input id="install-linux" class="form-control dg-query" readonly value="@InstallCommand()" />
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value); this.textContent='Copied';">Copy</button>
+                    </div>
+                    <label class="form-label small mb-1" for="install-windows">Windows (reads the event logs), in an Administrator PowerShell</label>
+                    <div class="input-group input-group-sm mb-2">
+                        <input id="install-windows" class="form-control dg-query" readonly value="@WindowsInstallCommand()" />
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value); this.textContent='Copied';">Copy</button>
+                    </div>
+                    </details>
+                    <p class="small text-body-secondary mb-0">
+                        Server addresses this server's certificate covers: @string.Join(", ", Hostnames()).
+                        Use the one the collector can reach, with the port it reaches 8443 on.
+                    </p>
+                }
+            </div>
+        </section>
+    }
+
+    <section class="dg-panel">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr><th>Agent</th><th>Tenant</th><th>Last report</th><th>Version</th><th>Certificate expires</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var a in _agents)
+                    {
+                        <tr>
+                            <td class="text-nowrap"><span class="dg-dot @Dot(a.State)" aria-hidden="true"></span>@a.Name</td>
+                            <td>@a.Tenant</td>
+                            <td class="text-nowrap" title="@a.LastSeen?.ToString("u", CultureInfo.InvariantCulture)">@(a.State == AgentState.Revoked ? "revoked" : AgentHealth.Ago(a.LastSeen))</td>
+                            <td class="text-nowrap">
+                                @a.Version
+                                @if (a.Platform is { } platform && Packages.Latest(platform) is { } newest && AgentPackageStore.IsNewer(newest.Version, a.Version))
+                                {
+                                    <span class="small text-body-secondary" title="Installs within 15 minutes if automatic updates are on">→ @newest.Version</span>
+                                }
+                                else if (a.Platform is null && a.State != AgentState.Revoked && Packages.List().Count > 0)
+                                {
+                                    <span class="small text-body-secondary" title="Older than 0.4.0: run the install command on it once to enable automatic updates">(manual)</span>
+                                }
+                            </td>
+                            <td class="text-nowrap">@a.CertificateNotAfter?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</td>
+                            <td class="text-end text-nowrap">
+                                <button type="button" class="btn btn-sm btn-link" @onclick="() => EditConfigAsync(a)">Edit inputs</button>
+                                @if (a.State == AgentState.Revoked)
+                                {
+                                    <button type="button" class="btn btn-sm btn-link" @onclick="() => SetRevokedAsync(a, false)">Restore</button>
+                                    @if (_confirmDelete == a.Id)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(a)">Confirm delete</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmDelete = a.Id">Delete</button>
+                                    }
+                                }
+                                else if (_confirmRevoke == a.Id)
+                                {
+                                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => SetRevokedAsync(a, true)">Confirm revoke</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmRevoke = a.Id">Revoke</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (_agents.Count == 0)
+                    {
+                        <tr><td colspan="6" class="text-body-secondary">No agents yet. Select <em>Enroll an agent</em> to create an install token.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    <p class="small text-body-secondary mt-2">
+        Revoking blocks an agent within 30 seconds; it keeps its buffered logs and sends them if it's restored. To move an agent to a new machine, create an install token for its name.
+    </p>
+
+    @if (_editing is { } editing)
+    {
+        <div class="modal d-block" tabindex="-1" role="dialog" style="background: rgba(0,0,0,.45);">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2 class="modal-title h5">Inputs for @editing.Name</h2>
+                        <button type="button" class="btn-close" aria-label="Close" @onclick="() => _editing = null"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="small text-body-secondary">
+                            Listening ports and source hints. The agent applies changes within a minute.
+                            Tag UniFi gear with <code>"dataset": "unifi"</code> so its logs are parsed.
+                        </p>
+                        <textarea class="form-control dg-query" rows="16" spellcheck="false" @bind="_configJson" aria-label="Agent configuration JSON"></textarea>
+                        @if (_configError is not null)
+                        {
+                            <div class="alert alert-danger small mt-2 mb-0">@_configError</div>
+                        }
+                        <details class="small mt-3">
+                            <summary>Examples to add to <code>"inputs"</code></summary>
+                            <p class="mt-2 mb-1">Tail log files (wildcards in the file name only; existing files start at their end unless <code>"fromBeginning": true</code>):</p>
+                            <pre class="dg-example">{ "type": "File", "paths": ["/var/log/nginx/*.log"], "app": "nginx" }
+{ "type": "File", "paths": ["/opt/pangolin/config/traefik/logs/access.log"], "app": "traefik-access" }
+{ "type": "File", "paths": ["/var/log/myapp/app.log"], "multiline": "Indented" }
+{ "type": "File", "paths": ["/var/log/asterisk/full"], "app": "asterisk", "multiline": "Pattern", "multilineStart": "^\\[\\d{4}-" }</pre>
+                            <p class="mb-1">
+                                HTTP Event Collector (HEC: Docker's log driver, Vector, Fluent Bit, scripts, apps).
+                                This token was just generated for you; keep it secret. Add <code>"tls": true</code> for HTTPS with the agent's certificate.
+                            </p>
+                            <pre class="dg-example">{ "type": "Hec", "port": 8088, "tokens": ["@_hecToken"] }</pre>
+                            <p class="mb-1">Send to it with <code>curl -H "Authorization: DGSIEM @_hecToken" http://AGENT:8088/services/collector/event -d '{"event": "hello", "sourcetype": "myapp"}'</code></p>
+                            <p class="mb-1">Windows event logs (Windows agents get the default set when they enroll; list channels to change it, with an optional event-log XPath filter):</p>
+                            <pre class="dg-example">{ "type": "WindowsEventLog", "channels": [ { "name": "Security" }, { "name": "Microsoft-Windows-TaskScheduler/Operational" }, { "name": "Microsoft-Windows-PowerShell/Operational", "query": "*[System[(EventID=4104)]]" } ] }</pre>
+                            <p class="mb-1">Syslog on another port, only from this machine:</p>
+                            <pre class="dg-example">{ "type": "SyslogTcp", "bindAddress": "127.0.0.1", "port": 5514 }</pre>
+                        </details>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _editing = null">Cancel</button>
+                        <button type="button" class="btn btn-sm btn-primary" @onclick="SaveConfigAsync">Save inputs</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<AgentStatus> _agents = [];
+    private IReadOnlyList<TenantSummary> _tenants = [];
+    private string? _error;
+
+    private bool _enrolling;
+    private string _tenant = string.Empty;
+    private string _agentName = string.Empty;
+    private int _hours = 24;
+    private string? _token;
+
+    private AgentStatus? _editing;
+    private string _configJson = string.Empty;
+    private string? _configError;
+    private readonly string _hecToken = Guid.NewGuid().ToString();
+    private Guid? _confirmRevoke;
+    private Guid? _confirmDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _tenants = await Admin.ListTenantsAsync(_access, CancellationToken.None);
+        _agents = await Health.ListAsync(_tenants.Select(t => t.Slug).ToList(), CancellationToken.None);
+        if (_tenant.Length == 0 && _tenants.Count > 0)
+        {
+            _tenant = _tenants[0].Slug;
+        }
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        _error = null;
+        try
+        {
+            await action();
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private Task CreateTokenAsync() => Run(async () =>
+        _token = await Admin.CreateEnrollmentTokenAsync(_access, _tenant, _agentName, _hours, CancellationToken.None));
+
+    private Task SetRevokedAsync(AgentStatus agent, bool revoked) => Run(async () =>
+    {
+        await Admin.SetAgentRevokedAsync(_access, agent.Id, revoked, CancellationToken.None);
+        _confirmRevoke = null;
+        await LoadAsync();
+    });
+
+    private Task DeleteAsync(AgentStatus agent) => Run(async () =>
+    {
+        await Admin.DeleteAgentAsync(_access, agent.Id, CancellationToken.None);
+        _confirmDelete = null;
+        await LoadAsync();
+    });
+
+    private Task EditConfigAsync(AgentStatus agent) => Run(async () =>
+    {
+        _configJson = await Admin.GetAgentConfigJsonAsync(_access!, agent.Id, CancellationToken.None);
+        _configError = null;
+        _editing = agent;
+    });
+
+    private async Task SaveConfigAsync()
+    {
+        try
+        {
+            await Admin.SetAgentConfigAsync(_access, _editing!.Id, _configJson, CancellationToken.None);
+            _editing = null;
+        }
+        catch (AdminException ex)
+        {
+            _configError = ex.Message;
+        }
+    }
+
+    private IEnumerable<string> Hostnames() =>
+        (Config.GetSection("Pki:AgentHostnames").Get<string[]>() ?? ["localhost"]).Where(h => !string.IsNullOrWhiteSpace(h));
+
+    private string ServerUrl()
+    {
+        var configured = Config["Server:AgentPublicUrl"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured.TrimEnd('/');
+        }
+        var host = Hostnames().FirstOrDefault(h => h != "localhost") ?? "localhost";
+        return $"https://{host}:{Config.GetValue("Server:AgentPort", 8443)}";
+    }
+
+    private string InstallCommand()
+    {
+        var name = string.IsNullOrWhiteSpace(_agentName) ? "" : $" --name {_agentName.Trim()}";
+        return $"sudo ./install.sh --binary ./dg-siem-agent --server {ServerUrl()} --token {_token}{name}";
+    }
+
+    /// <summary>Download with the token, check the package's SHA-256 (the agent port's certificate isn't publicly trusted), install.</summary>
+    private string OneLiner(AgentPackage package)
+    {
+        var server = ServerUrl();
+        var url = $"{server}/api/v1/agents/packages/{package.Platform}";
+        var name = _agentName.Trim();
+        if (package.IsWindows)
+        {
+            var nameArg = name.Length == 0 ? "" : $" -Name '{name}'";
+            return "$s='" + server + "';$t='" + _token + "';$z=\"$env:TEMP\\dg-siem-agent.zip\";$d=\"$env:TEMP\\dg-siem-agent\";" +
+                "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;[Net.ServicePointManager]::ServerCertificateValidationCallback={$true};" +
+                "$w=New-Object Net.WebClient;$w.Headers.Add('Authorization',\"Bearer $t\");$w.DownloadFile('" + url + "',$z);" +
+                "[Net.ServicePointManager]::ServerCertificateValidationCallback=$null;" +
+                "if((Get-FileHash $z -Algorithm SHA256).Hash -ne '" + package.PackageSha256 + "'){throw 'The download does not match the checksum; not installing.'};" +
+                "Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue;Expand-Archive $z $d;" +
+                "powershell -ExecutionPolicy Bypass -File \"$d\\install.ps1\" -Server $s -Token $t" + nameArg;
+        }
+        var nameOpt = name.Length == 0 ? "" : $" --name {name}";
+        return $"curl -fsSk -H \"Authorization: Bearer {_token}\" -o /tmp/dg-siem-agent.tar.gz {url} && " +
+            $"echo \"{package.PackageSha256}  /tmp/dg-siem-agent.tar.gz\" | sha256sum -c --quiet && " +
+            "rm -rf /tmp/dg-siem-agent && mkdir /tmp/dg-siem-agent && tar -xzf /tmp/dg-siem-agent.tar.gz -C /tmp/dg-siem-agent && " +
+            $"/tmp/dg-siem-agent/install.sh --server {server} --token {_token}{nameOpt}";
+    }
+
+    private string WindowsInstallCommand()
+    {
+        var name = string.IsNullOrWhiteSpace(_agentName) ? "" : $" -Name {_agentName.Trim()}";
+        return $"powershell -ExecutionPolicy Bypass -File .\\install.ps1 -Server {ServerUrl()} -Token {_token}{name}";
+    }
+
+    private static string Dot(AgentState state) => state switch
+    {
+        AgentState.Online => "dg-dot-ok",
+        AgentState.Late => "dg-dot-warn",
+        AgentState.Offline => "dg-dot-bad",
+        _ => "dg-dot-off",
+    };
+}

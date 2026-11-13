@@ -1,0 +1,71 @@
+@page "/account/login"
+@using System.ComponentModel.DataAnnotations
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Security
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@attribute [AllowAnonymous]
+@layout DreaminGeek.Siem.Web.Components.Layout.EmptyLayout
+@inject SignInManager<SiemUser> SignIn
+@inject NavigationManager Nav
+
+<PageTitle>Sign in · DG SIEM</PageTitle>
+
+<AuthCard Title="Sign in" Error="@_error">
+    <EditForm Model="Input!" method="post" OnValidSubmit="SignInAsync" FormName="login">
+        <DataAnnotationsValidator />
+        <div class="mb-3">
+            <label for="email" class="form-label">Email</label>
+            <InputText id="email" class="form-control" @bind-Value="Input!.Email" autocomplete="username" autofocus />
+            <ValidationMessage For="() => Input!.Email" class="small" />
+        </div>
+        <div class="mb-3">
+            <label for="password" class="form-label">Password</label>
+            <InputText id="password" type="password" class="form-control" @bind-Value="Input!.Password" autocomplete="current-password" />
+            <ValidationMessage For="() => Input!.Password" class="small" />
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Sign in</button>
+    </EditForm>
+    <p class="text-body-secondary small mt-4 mb-0">
+        First time here? Create an admin account on the server with
+        <code>dg-siem-server user add you@example.com --admin</code>.
+    </p>
+</AuthCard>
+
+@code {
+    [SupplyParameterFromForm]
+    private LoginInput? Input { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    protected override void OnInitialized() => Input ??= new LoginInput();
+
+    private async Task SignInAsync()
+    {
+        var result = await SignIn.PasswordSignInAsync(Input!.Email.Trim(), Input.Password, isPersistent: false, lockoutOnFailure: true);
+        if (result.Succeeded)
+        {
+            Nav.NavigateTo(ReturnUrls.Safe(ReturnUrl), forceLoad: true);
+            return;
+        }
+        if (result.RequiresTwoFactor)
+        {
+            // Password was right; the authenticator code comes next (a short-lived cookie remembers who).
+            Nav.NavigateTo($"/account/login-2fa{ReturnUrls.Query(ReturnUrl)}", forceLoad: true);
+            return;
+        }
+        _error = result.IsLockedOut ? "Too many attempts. Try again in 15 minutes." : "Invalid email or password.";
+    }
+
+    private sealed class LoginInput
+    {
+        [Required, EmailAddress]
+        public string Email { get; set; } = string.Empty;
+
+        [Required]
+        public string Password { get; set; } = string.Empty;
+    }
+}

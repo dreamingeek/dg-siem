@@ -1,0 +1,479 @@
+@page "/dashboards/{Id:guid}"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Dashboards
+@using DreaminGeek.Siem.Web.Security
+@implements IAsyncDisposable
+@inject DashboardService Dashboards
+@inject TenantAccess Access
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject DreaminGeek.Siem.Alerting.SettingsStore Settings
+
+<PageTitle>@(_model?.Name ?? "Dashboard") · DG SIEM</PageTitle>
+
+<AdminOnly Access="_access">
+    @if (_missing)
+    {
+        <div class="alert alert-warning small mt-3">That dashboard doesn't exist any more. <a href="dashboards">All dashboards</a></div>
+    }
+    else if (_model is not null)
+    {
+        <div class="dg-dash-head">
+            @if (_editing)
+            {
+                <div class="dg-dash-title-edit">
+                    <input class="form-control form-control-sm dg-dash-name" @bind="_model.Name" aria-label="Dashboard name" maxlength="120" />
+                    <input class="form-control form-control-sm" @bind="_model.Description" aria-label="Description" placeholder="Description (optional)" />
+                </div>
+            }
+            else
+            {
+                <div class="dg-dash-title">
+                    <h1>@_model.Name</h1>
+                    @if (!string.IsNullOrEmpty(_model.Description))
+                    {
+                        <p>@_model.Description</p>
+                    }
+                </div>
+            }
+            <div class="dg-dash-controls">
+                <select class="form-select form-select-sm" aria-label="Tenants" @bind="_tenant" @bind:after="Refresh">
+                    <option value="">All tenants</option>
+                    @foreach (var t in _access!.Tenants)
+                    {
+                        <option value="@t">@t</option>
+                    }
+                </select>
+                <select class="form-select form-select-sm" aria-label="Time range" @bind="_range" @bind:after="Refresh">
+                    @foreach (var (value, label) in DashboardService.Ranges)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <select class="form-select form-select-sm" aria-label="Auto-refresh" @bind="_refreshSeconds" @bind:after="RestartTimer">
+                    @foreach (var (seconds, label) in DashboardService.RefreshOptions)
+                    {
+                        <option value="@seconds">@(seconds == 0 ? "Auto-refresh off" : label)</option>
+                    }
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-secondary" title="Refresh now" @onclick="Refresh">Refresh</button>
+                @if (_editing)
+                {
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="AddPanel">Add panel</button>
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@_saving" @onclick="SaveAsync">Save</button>
+                    <button type="button" class="btn btn-sm btn-link" @onclick="CancelEditAsync">Cancel</button>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="StartEdit">Edit</button>
+                }
+            </div>
+        </div>
+        <div class="dg-dash-sub small text-body-secondary">
+            <a href="dashboards">Dashboards</a>
+            <span>@WindowLabel</span>
+            @if (_editing)
+            {
+                <span class="dg-dash-hint">Drag a panel by its title, resize from its corner. Save keeps the layout and makes the current time range and refresh the defaults.</span>
+            }
+        </div>
+
+        @if (_error is not null)
+        {
+            <div class="alert alert-danger small" role="alert">@_error</div>
+        }
+
+        @if (_model.Panels.Count == 0)
+        {
+            <div class="dg-panel dg-dash-empty">
+                <p>No panels yet.</p>
+                <button type="button" class="btn btn-sm btn-primary" @onclick="AddPanel">Add panel</button>
+                <p class="small text-body-secondary mt-2 mb-0">Or run a search and choose <strong>Add to dashboard</strong>.</p>
+            </div>
+        }
+
+        <div class="grid-stack dg-grid @(_editing ? "dg-grid-editing" : "")" @ref="_grid">
+            @foreach (var panel in _model.Panels)
+            {
+                <div @key="panel.Id" class="grid-stack-item" gs-id="@panel.Id" gs-x="@panel.X" gs-y="@panel.Y" gs-w="@panel.W" gs-h="@panel.H">
+                    <div class="grid-stack-item-content">
+                        <PanelTile Panel="panel" Access="_access" From="_from" To="_to" Tenants="Tenants" Version="_version" Range="@_range"
+                                   Editing="_editing" OnEdit="EditPanel" OnRemove="RemovePanel" />
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    @if (_draft is not null)
+    {
+        <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="pedit-title" style="background: rgba(0,0,0,.45);">
+            <div class="modal-dialog modal-xl" @onclick:stopPropagation="true">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2 class="modal-title h5" id="pedit-title">@(_draftIsNew ? "Add panel" : "Edit panel")</h2>
+                        <button type="button" class="btn-close btn-close-white" aria-label="Close" @onclick="() => _draft = null"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-3">
+                            <div class="col-lg-5">
+                                <label class="form-label small" for="ptitle">Title</label>
+                                <input id="ptitle" class="form-control form-control-sm mb-2" @bind="_draft.Title" placeholder="Failed logins" maxlength="120" />
+                                <label class="form-label small" for="pquery">Search</label>
+                                <input id="pquery" class="form-control dg-query mb-1" @bind="_draft.Query" @bind:event="oninput" spellcheck="false" autocomplete="off"
+                                       data-dg-assist role="combobox" aria-autocomplete="list" aria-expanded="false"
+                                       placeholder="dataset=authentik.event action=login_failed | stats count()" />
+                                <div class="form-text mb-2">@PanelHint</div>
+                                <div class="row g-2">
+                                    <div class="col-7">
+                                        <label class="form-label small" for="pkind">Show as</label>
+                                        <select id="pkind" class="form-select form-select-sm" @bind="_draft.Kind">
+                                            @foreach (var kind in Enum.GetValues<PanelKind>())
+                                            {
+                                                <option value="@kind">@DashboardPanel.Describe(kind)</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="col-5">
+                                        <label class="form-label small" for="punit">Values are</label>
+                                        <select id="punit" class="form-select form-select-sm" @bind="_draft.Unit">
+                                            <option value="@PanelUnit.Number">numbers</option>
+                                            <option value="@PanelUnit.Duration">durations (ns)</option>
+                                            <option value="@PanelUnit.Bytes">bytes</option>
+                                            <option value="@PanelUnit.Percent">percentages</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                @if (_draftError is not null)
+                                {
+                                    <div class="alert alert-danger small mt-3 mb-0" role="alert">@_draftError</div>
+                                }
+                            </div>
+                            <div class="col-lg-7">
+                                <div class="d-flex align-items-center justify-content-between mb-1">
+                                    <span class="form-label small mb-0">Preview</span>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="Preview">Preview</button>
+                                </div>
+                                <div class="dg-preview-tile" style="height: @(_preview?.Kind == PanelKind.Stat ? "170px" : "320px");">
+                                    @if (_preview is not null)
+                                    {
+                                        <PanelTile Panel="_preview" Access="_access" From="_from" To="_to" Tenants="Tenants" Version="_previewVersion" Range="@_range" ShowSearchLink="false" />
+                                    }
+                                    else
+                                    {
+                                        <div class="dg-tile-msg">Choose Preview to run the search for the dashboard's current time range and tenants.</div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-sm btn-link" @onclick="() => _draft = null">Cancel</button>
+                        <button type="button" class="btn btn-sm btn-primary" @onclick="ApplyDraft">@(_draftIsNew ? "Add" : "Apply")</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</AdminOnly>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    [SupplyParameterFromQuery(Name = "edit")]
+    private string? EditParam { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private DashboardModel? _model;
+    private bool _missing;
+    private bool _editing;
+    private bool _saving;
+    private string? _error;
+
+    private string _tenant = string.Empty;
+    private string _range = "-24h";
+    private int _refreshSeconds;
+    private DateTimeOffset _from;
+    private DateTimeOffset _to;
+    private int _version;
+
+    private ElementReference _grid;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<DashboardView>? _self;
+    private bool _gridReady;
+    private bool _syncGrid;
+    private bool _toggleEdit;
+    private CancellationTokenSource? _timer;
+
+    private DashboardPanel? _draft;
+    private DashboardPanel? _draftTarget;
+    private bool _draftIsNew;
+    private string? _draftError;
+    private DashboardPanel? _preview;
+    private int _previewVersion;
+
+    private IReadOnlyList<string> Tenants => _tenant.Length > 0 ? [_tenant] : _access?.Tenants ?? [];
+
+    private TimeZoneInfo _zone = TimeZoneInfo.Utc;
+
+    private string WindowLabel =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"{TimeZoneInfo.ConvertTime(_from, _zone):MMM d HH:mm} to {TimeZoneInfo.ConvertTime(_to, _zone):MMM d HH:mm} ({(_zone == TimeZoneInfo.Utc ? "UTC" : _zone.Id)})");
+
+    private string PanelHint => _draft is null ? string.Empty : DashboardPanel.Hint(_draft.Kind);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _zone = (await Settings.GetGeneralAsync(CancellationToken.None)).Zone;
+        await LoadAsync();
+        _editing = EditParam == "1" && _model is not null;
+    }
+
+    private async Task LoadAsync()
+    {
+        _model = await Dashboards.GetAsync(_access!, Id, CancellationToken.None);
+        _missing = _model is null;
+        if (_model is null)
+        {
+            return;
+        }
+        _range = _model.TimeRange;
+        _refreshSeconds = _model.RefreshSeconds;
+        SetWindow();
+        RestartTimer();
+    }
+
+    private void SetWindow() => (_from, _to) = DashboardService.Window(_range, DateTimeOffset.UtcNow);
+
+    private void Refresh()
+    {
+        SetWindow();
+        _version++;
+    }
+
+    private void RestartTimer()
+    {
+        _timer?.Cancel();
+        _timer?.Dispose();
+        _timer = null;
+        if (_refreshSeconds <= 0)
+        {
+            return;
+        }
+        _timer = new CancellationTokenSource();
+        var token = _timer.Token;
+        var period = TimeSpan.FromSeconds(_refreshSeconds);
+        _ = Task.Run(async () =>
+        {
+            using var ticker = new PeriodicTimer(period);
+            while (await ticker.WaitForNextTickAsync(token).ConfigureAwait(false))
+            {
+                await InvokeAsync(() =>
+                {
+                    // Don't move panels' data out from under someone mid-edit.
+                    if (_draft is null)
+                    {
+                        Refresh();
+                        StateHasChanged();
+                    }
+                });
+            }
+        }, token).ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_model is null || _access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        try
+        {
+            if (!_gridReady)
+            {
+                _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/dashboard.js");
+                _self ??= DotNetObjectReference.Create(this);
+                await _module.InvokeVoidAsync("initGrid", _grid, _self, _editing);
+                _gridReady = true;
+                _syncGrid = _toggleEdit = false;
+                return;
+            }
+            if (_syncGrid)
+            {
+                _syncGrid = false;
+                await _module!.InvokeVoidAsync("syncGrid", _grid);
+            }
+            if (_toggleEdit)
+            {
+                _toggleEdit = false;
+                await _module!.InvokeVoidAsync("setEditable", _grid, _editing);
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // Page closed.
+        }
+    }
+
+    public sealed record LayoutItem(string Id, int X, int Y, int W, int H);
+
+    [JSInvokable]
+    public void OnLayoutChanged(List<LayoutItem> items)
+    {
+        if (_model is null || !_editing || items is null)
+        {
+            return;
+        }
+        foreach (var item in items)
+        {
+            if (_model.Panels.FirstOrDefault(p => p.Id == item.Id) is { } panel)
+            {
+                (panel.X, panel.Y, panel.W, panel.H) = (item.X, item.Y, Math.Max(1, item.W), Math.Max(1, item.H));
+            }
+        }
+    }
+
+    private void StartEdit()
+    {
+        _editing = true;
+        _toggleEdit = true;
+    }
+
+    private async Task CancelEditAsync()
+    {
+        _editing = false;
+        _error = null;
+        var range = _range;
+        await LoadAsync();
+        _range = range;
+        _syncGrid = true;
+        _toggleEdit = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_model is null)
+        {
+            return;
+        }
+        _error = null;
+        _saving = true;
+        try
+        {
+            _model.TimeRange = _range;
+            _model.RefreshSeconds = _refreshSeconds;
+            await Dashboards.SaveAsync(_access!, _model, CancellationToken.None);
+            _editing = false;
+            _toggleEdit = true;
+            Nav.NavigateTo($"dashboards/{Id}", replace: true);
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void AddPanel()
+    {
+        _editing = true;
+        _toggleEdit = true;
+        _draft = new DashboardPanel { Kind = PanelKind.TimeBars, Query = "* | timechart count() by dataset", Title = "Events by dataset" };
+        _draftTarget = null;
+        _draftIsNew = true;
+        _draftError = null;
+        _preview = null;
+    }
+
+    private void EditPanel(DashboardPanel panel)
+    {
+        _draft = panel.Clone();
+        _draftTarget = panel;
+        _draftIsNew = false;
+        _draftError = null;
+        _preview = null;
+    }
+
+    private void RemovePanel(DashboardPanel panel)
+    {
+        _model?.Panels.Remove(panel);
+        _syncGrid = true;
+    }
+
+    private void Preview()
+    {
+        if (_draft is null)
+        {
+            return;
+        }
+        _preview = _draft.Clone();
+        _previewVersion++;
+    }
+
+    private void ApplyDraft()
+    {
+        if (_draft is null || _model is null)
+        {
+            return;
+        }
+        try
+        {
+            Dashboards.ValidatePanel(_draft);
+        }
+        catch (AdminException ex)
+        {
+            _draftError = ex.Message;
+            return;
+        }
+
+        if (_draftIsNew)
+        {
+            (_draft.W, _draft.H) = DashboardPanel.DefaultSize(_draft.Kind);
+            _draft.X = 0;
+            _draft.Y = _model.Panels.Count == 0 ? 0 : _model.Panels.Max(p => p.Y + p.H);
+            _model.Panels.Add(_draft);
+            _syncGrid = true;
+        }
+        else if (_draftTarget is not null)
+        {
+            _draftTarget.Title = _draft.Title;
+            _draftTarget.Query = _draft.Query;
+            _draftTarget.Kind = _draft.Kind;
+            _draftTarget.Unit = _draft.Unit;
+        }
+        _draft = null;
+        _preview = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _timer?.Cancel();
+        _timer?.Dispose();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("destroyGrid", _grid);
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Page closed.
+            }
+        }
+        _self?.Dispose();
+    }
+}

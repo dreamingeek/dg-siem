@@ -1,0 +1,155 @@
+@page "/alerts/history"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Alerts
+@using DreaminGeek.Siem.Web.Security
+@inject AlertAdminService Alerts
+@inject TenantAccess Access
+
+<PageTitle>Alert history · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Alert history</h1>
+    <p>
+        <a href="alerts">Alerts</a> /
+        @if (_ruleName is not null)
+        {
+            <span>@_ruleName (<a href="alerts/history">show all</a>)</span>
+        }
+        else if (Firing is not null)
+        {
+            <span>one alert (<a href="alerts/history">show all</a>)</span>
+        }
+        else
+        {
+            <span>the last @Limit alerts sent. Repeats inside a quiet period are counted on the alert they repeat.</span>
+        }
+    </p>
+</div>
+
+<AdminOnly Access="_access">
+    <section class="dg-panel">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr><th>Fired</th><th>Alert</th><th>Severity</th><th>Tenant</th><th class="num">Matched</th><th>Outcome</th><th>Ticket</th><th class="num">Repeats</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var f in _firings)
+                    {
+                        var open = _open.Contains(f.Id);
+                        <tr class="dg-clickable" @onclick="() => Toggle(f.Id)" aria-expanded="@(open ? "true" : "false")">
+                            <td class="text-nowrap" title="@f.FiredAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", CultureInfo.InvariantCulture)">@AgentHealth.Ago(f.FiredAt)</td>
+                            <td>
+                                <div>@f.Title</div>
+                                @if (_ruleName is null)
+                                {
+                                    <div class="small text-body-secondary"><a href="@($"alerts/history?rule={f.RuleId}")" @onclick:stopPropagation>@f.RuleName</a></div>
+                                }
+                            </td>
+                            <td><span class="@AlertUi.SeverityClass(f.Severity)">@f.Severity</span></td>
+                            <td>@f.Tenant</td>
+                            <td class="num">@f.ResultCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                            <td class="text-nowrap"><span class="@AlertUi.StatusDot(f.Status)"></span>@AlertUi.StatusText(f.Status)</td>
+                            <td>@(f.TicketNumber ?? "")</td>
+                            <td class="num" title="@(f.LastSuppressedAt is null ? "" : "Last repeat " + AgentHealth.Ago(f.LastSuppressedAt))">@(f.SuppressedCount == 0 ? "" : f.SuppressedCount.ToString(CultureInfo.InvariantCulture))</td>
+                        </tr>
+                        @if (open)
+                        {
+                            <tr class="dg-detail-row">
+                                <td colspan="8">
+                                    <div class="dg-firing">
+                                        <dl class="dg-facts">
+                                            <dt>Window</dt>
+                                            <dd>@f.WindowStart.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) to @f.WindowEnd.UtcDateTime.ToString("HH:mm", CultureInfo.InvariantCulture) UTC
+                                                · <a href="@SearchLink(f)">@(f.RuleQuery.Length == 0 ? "open Health" : "open the search")</a></dd>
+                                            @foreach (var a in f.Actions)
+                                            {
+                                                <dt>@(a.Action == "email" ? "Email" : a.Action == "ticket" ? "Ticket" : a.Action)</dt>
+                                                <dd><span class="@(a.Ok ? "dg-dot dg-dot-ok" : "dg-dot dg-dot-bad")"></span>@a.Detail</dd>
+                                            }
+                                            @if (f.Actions.Count == 0)
+                                            {
+                                                <dt>Actions</dt>
+                                                <dd>None: this alert only records history.</dd>
+                                            }
+                                        </dl>
+                                        @if (f.Rows.Count > 0)
+                                        {
+                                            <div class="table-responsive">
+                                                <table class="table table-sm dg-log mb-0">
+                                                    <thead><tr>@foreach (var c in f.Columns) { <th>@c</th> }</tr></thead>
+                                                    <tbody>
+                                                        @foreach (var row in f.Rows)
+                                                        {
+                                                            <tr>@foreach (var v in row) { <td class="text-truncate" style="max-width: 32rem;" title="@v">@v</td> }</tr>
+                                                        }
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    @if (_firings.Count == 0 && _loaded)
+                    {
+                        <tr><td colspan="8" class="text-body-secondary">Nothing has fired yet.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</AdminOnly>
+
+@code {
+    private const int Limit = 200;
+
+    [SupplyParameterFromQuery(Name = "rule")]
+    private Guid? Rule { get; set; }
+
+    [SupplyParameterFromQuery(Name = "firing")]
+    private Guid? Firing { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<AlertFiringView> _firings = [];
+    private readonly HashSet<Guid> _open = [];
+    private string? _ruleName;
+    private bool _loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _access ??= await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _firings = await Alerts.HistoryAsync(_access, Rule, Firing, Limit, CancellationToken.None);
+        _ruleName = Rule is null ? null : _firings.FirstOrDefault()?.RuleName ?? (await Alerts.GetRuleAsync(_access, Rule.Value, CancellationToken.None))?.Name;
+        _open.Clear();
+        if (Firing is { } id)
+        {
+            _open.Add(id);
+        }
+        _loaded = true;
+    }
+
+    private void Toggle(Guid id)
+    {
+        if (!_open.Remove(id))
+        {
+            _open.Add(id);
+        }
+    }
+
+    private static string SearchLink(AlertFiringView f) => f.RuleQuery.Length == 0
+        ? $"admin/health?tenant={Uri.EscapeDataString(f.Tenant)}"
+        : $"search?q={Uri.EscapeDataString(f.RuleQuery)}" +
+        $"&from={Uri.EscapeDataString(f.WindowStart.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+        $"&to={Uri.EscapeDataString(f.WindowEnd.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}&tenant={Uri.EscapeDataString(f.Tenant)}";
+}

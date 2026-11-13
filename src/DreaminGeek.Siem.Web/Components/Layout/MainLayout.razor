@@ -1,0 +1,142 @@
+@inherits LayoutComponentBase
+@using DreaminGeek.Siem.Web.Security
+@inject TenantAccess Access
+@inject DreaminGeek.Siem.Web.Features.FeatureState Features
+
+<div class="dg-shell">
+    <aside class="dg-rail" aria-label="Main navigation">
+        <a class="dg-brand" href="">
+            <img class="dg-brand-mark" src="brand/dg-siem-mark.png" alt="" width="26" height="28" />
+            <span>DG <span class="dg-brand-siem">SIEM</span></span>
+        </a>
+        <nav class="dg-nav">
+            <NavLink href="" Match="NavLinkMatch.All" title="Overview">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 13.5h12M3.5 11V7.5M6.5 11V4.5M9.5 11V6.5M12.5 11V2.5" /></svg>
+                <span>Overview</span>
+            </NavLink>
+            <NavLink href="search" title="Search">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3.5 3.5" /></svg>
+                <span>Search</span>
+            </NavLink>
+            @if (_access?.IsGlobalAdmin == true)
+            {
+                <NavLink href="dashboards" title="Dashboards">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="1.5" width="6" height="7" rx="1" /><rect x="8.5" y="1.5" width="6" height="4" rx="1" /><rect x="8.5" y="6.5" width="6" height="8" rx="1" /><rect x="1.5" y="9.5" width="6" height="5" rx="1" /></svg>
+                    <span>Dashboards</span>
+                </NavLink>
+                <NavLink href="alerts" title="Alerts">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1.5 1.5h-11zM6.5 14.5h3" /></svg>
+                    <span>Alerts</span>
+                </NavLink>
+                <div class="dg-nav-group">Administration</div>
+                <NavLink href="admin/health" title="Health">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 8.5h3l1.5-4 2.5 8 2-5.5 1 1.5h3" /></svg>
+                    <span>Health</span>
+                </NavLink>
+                <NavLink href="admin/agents" title="Agents">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4" rx="1" /><rect x="2" y="9.5" width="12" height="4" rx="1" /><path d="M4.5 4.5h.01M4.5 11.5h.01" /></svg>
+                    <span>Agents</span>
+                </NavLink>
+                <NavLink href="admin/tenants" title="Tenants">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 14V5l5-2.5L12.5 5v9M2.5 14h11M5.5 7.5h.01M9.5 7.5h.01M5.5 10.5h.01M9.5 10.5h.01" /></svg>
+                    <span>Tenants</span>
+                </NavLink>
+                <NavLink href="admin/users" title="Users">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5" /><path d="M1.5 13.5c.6-2.4 2.3-3.5 4.5-3.5s3.9 1.1 4.5 3.5M11 3.2a2.4 2.4 0 0 1 0 4.6M12.5 10.3c1.1.5 1.8 1.6 2 3.2" /></svg>
+                    <span>Users</span>
+                </NavLink>
+                <NavLink href="admin/agent-updates" title="Agent updates">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M2.5 11.5v2h11v-2" /></svg>
+                    <span>Agent updates</span>
+                </NavLink>
+                <NavLink href="admin/storage" title="Storage">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><ellipse cx="8" cy="3.5" rx="5.5" ry="2" /><path d="M2.5 3.5v9c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2v-9M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2" /></svg>
+                    <span>Storage</span>
+                </NavLink>
+                <NavLink href="admin/backups" title="Backups">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 9.5v4h11v-4M8 2.5v7M5 6.5l3 3 3-3" /><path d="M2.5 9.5h3l1 1.5h3l1-1.5h3" /></svg>
+                    <span>Backups</span>
+                </NavLink>
+                <NavLink href="admin/drop-rules" title="Drop rules">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 3h12l-4.5 5.5V13l-3 1.5V8.5z" /></svg>
+                    <span>Drop rules</span>
+                </NavLink>
+                @if (_features?.ThreatIntel == true)
+                {
+                    <NavLink href="admin/threat-intel" title="Threat intel">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /><circle cx="8" cy="8" r="3.5" /><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3" /></svg>
+                        <span>Threat intel</span>
+                    </NavLink>
+                }
+                <NavLink href="admin/geoip" title="GeoIP">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /><path d="M1.5 8h13M8 1.5c2 2 2.8 4.2 2.8 6.5S10 12.5 8 14.5M8 1.5C6 3.5 5.2 5.7 5.2 8S6 12.5 8 14.5" /></svg>
+                    <span>GeoIP</span>
+                </NavLink>
+                <NavLink href="admin/notifications" title="Notifications">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="3.5" width="13" height="9" rx="1" /><path d="m2 4 6 5 6-5" /></svg>
+                    <span>Notifications</span>
+                </NavLink>
+                <NavLink href="admin/features" title="Features">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="3" width="13" height="4" rx="2" /><circle cx="11.5" cy="5" r="1" fill="currentColor" /><rect x="1.5" y="9" width="13" height="4" rx="2" /><circle cx="4.5" cy="11" r="1" /></svg>
+                    <span>Features</span>
+                </NavLink>
+            }
+        </nav>
+        <div class="dg-rail-foot">
+            <a href="https://github.com/dreamingeek/dg-siem/blob/main/docs/search.md" target="_blank" rel="noopener">Search language</a>
+        </div>
+    </aside>
+
+    <div class="dg-main">
+        <header class="dg-bar">
+            <form action="search" method="get" class="flex-grow-1" style="max-width: 36rem;" role="search">
+                <input class="form-control form-control-sm dg-query" name="q" placeholder="Search events, e.g. dataset=unifi.firewall action=blocked" aria-label="Quick search" autocomplete="off" spellcheck="false" data-dg-assist
+                       role="combobox" aria-autocomplete="list" aria-expanded="false" />
+            </form>
+            <div class="dg-user">
+                <button type="button" class="dg-icon-btn" onclick="dgToggleTheme()" title="Switch light/dark theme" aria-label="Switch light or dark theme">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor" /></svg>
+                </button>
+                <AuthorizeView>
+                    <Authorized>
+                        <a class="dg-user-link text-truncate" style="max-width: 16rem;" href="account/security" title="Your account: password and two-factor">@context.User.Identity?.Name</a>
+                        <form action="account/logout" method="post">
+                            <AntiforgeryToken />
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">Sign out</button>
+                        </form>
+                        <DreaminGeek.Siem.Web.Components.Account.SessionGuard @rendermode="InteractiveServer" />
+                    </Authorized>
+                </AuthorizeView>
+            </div>
+        </header>
+        <main class="dg-content">
+            @Body
+        </main>
+    </div>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    Something went wrong on this page.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss" role="button" aria-label="Dismiss">×</span>
+</div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthState { get; set; }
+
+    private UserAccess? _access;
+    private DreaminGeek.Siem.Alerting.FeatureSettings? _features;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        }
+        if (_access?.IsGlobalAdmin == true)
+        {
+            _features = await Features.GetAsync(CancellationToken.None);
+        }
+    }
+}

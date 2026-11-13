@@ -1,0 +1,447 @@
+@page "/admin/storage"
+@rendermode InteractiveServer
+@using System.Globalization
+@using DreaminGeek.Siem.Core
+@using DreaminGeek.Siem.Storage.ClickHouse
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Security
+@using DreaminGeek.Siem.Web.Storage
+@inject RetentionService Retention
+@inject ColdStorageService Cold
+@inject RetentionPolicy Policy
+@inject ClickHouseStorage Storage
+@inject TenantAccess Access
+
+<PageTitle>Storage · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Storage</h1>
+    <p>How long events are kept, where they're stored, and what each source costs.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+    @if (Retention.Problem is { } problem)
+    {
+        <div class="alert alert-warning small" role="alert">@problem</div>
+    }
+
+    <div class="row g-3">
+        <div class="col-xl-7">
+            <section class="dg-panel h-100">
+                <header><h2>Retention</h2></header>
+                <div class="dg-body">
+                    <p class="small">
+                        Each event is kept for the days of the most specific rule that matches it: a rule for its tenant beats one for all tenants,
+                        and an exact dataset beats a prefix like <code>unifi.*</code>, which beats <code>*</code>. New events follow changes straight away;
+                        <strong>Apply to stored events</strong> brings older ones in line.
+                    </p>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead><tr><th>Tenant</th><th>Dataset</th><th class="text-end">Keep (days)</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var rule in _rules)
+                                {
+                                    <tr>
+                                        <td>
+                                            <select class="form-select form-select-sm" @bind="rule.Tenant" aria-label="Tenant">
+                                                <option value="">All tenants</option>
+                                                @foreach (var t in _access!.Tenants)
+                                                {
+                                                    <option value="@t">@t</option>
+                                                }
+                                            </select>
+                                        </td>
+                                        <td><input class="form-control form-control-sm dg-query" @bind="rule.Dataset" placeholder="windows.security or unifi.*" aria-label="Dataset" /></td>
+                                        <td><input type="number" min="1" max="3650" class="form-control form-control-sm text-end" style="max-width: 7rem; margin-left: auto;" @bind="rule.Days" aria-label="Days" /></td>
+                                        <td class="text-end"><button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _rules.Remove(rule)" aria-label="Remove rule">Remove</button></td>
+                                    </tr>
+                                }
+                                <tr>
+                                    <td colspan="2" class="small text-body-secondary">Everything else</td>
+                                    <td><input type="number" min="1" max="3650" class="form-control form-control-sm text-end" style="max-width: 7rem; margin-left: auto;" @bind="_defaultDays" aria-label="Default days" /></td>
+                                    <td></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="d-flex gap-2 flex-wrap align-items-center">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="AddRule">Add rule</button>
+                        <button type="button" class="btn btn-sm btn-link" @onclick="ResetToSuggested">Suggested rules</button>
+                        <span class="flex-grow-1"></span>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@_busy" @onclick="SaveAsync">Save</button>
+                        @if (_confirmApply)
+                        {
+                            <button type="button" class="btn btn-sm btn-danger" disabled="@_busy" @onclick="ApplyAsync">Re-stamp stored events now</button>
+                            <button type="button" class="btn btn-sm btn-link" @onclick="() => _confirmApply = false">Cancel</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => _confirmApply = true">Apply to stored events…</button>
+                        }
+                    </div>
+                    @if (_confirmApply)
+                    {
+                        <p class="small text-danger mt-2 mb-0">
+                            Stored events get the saved rules' retention. Where that's shorter than before, events past it are deleted within hours and can't be recovered.
+                        </p>
+                    }
+                    <Status Value="@_outcome" />
+                </div>
+            </section>
+        </div>
+
+        <div class="col-xl-5">
+            <section class="dg-panel mb-3">
+                <header><h2>Cold storage</h2></header>
+                <div class="dg-body">
+                    @if (_cold is { } c)
+                    {
+                        @if (c.Mode == ColdStorageMode.ManagedHere && !_editBucket)
+                        {
+                            <dl class="small mb-2">
+                                <dt>Bucket</dt>
+                                <dd><code class="text-break">@c.Endpoint</code></dd>
+                                <dt>Access key ID</dt>
+                                <dd class="mb-1"><code>@c.AccessKeyId</code></dd>
+                            </dl>
+                            <button type="button" class="btn btn-sm btn-outline-secondary mb-3" @onclick="EditBucket">Change keys</button>
+                        }
+                        else if (!c.ConfigWritable)
+                        {
+                            <p class="small">
+                                To keep older events in an S3-compatible bucket (Backblaze B2, Wasabi, MinIO), this server needs the latest
+                                <code>docker-compose.yml</code>, which lets it hand the bucket to ClickHouse. Pull the update and run
+                                <code>docker compose up -d</code>; see <code>docs/storage.md</code>.
+                            </p>
+                        }
+                        else
+                        {
+                            @if (c.Mode == ColdStorageMode.SetUpOutside)
+                            {
+                                <p class="small">
+                                    The bucket is set up in <code>docker-compose.s3.yml</code>. To manage it here instead, enter the same bucket and keys
+                                    (<code>DGSIEM_S3_*</code> in <code>.env</code>) and save, then take <code>docker-compose.s3.yml</code> out of
+                                    <code>COMPOSE_FILE</code> and run <code>docker compose up -d</code>.
+                                </p>
+                            }
+                            else if (c.Mode == ColdStorageMode.NotSetUp)
+                            {
+                                <p class="small">
+                                    Keep older events in an S3-compatible bucket (Backblaze B2, Wasabi, MinIO) instead of on this server's disk.
+                                    Give DG SIEM a bucket, or a folder in one, that nothing else writes to.
+                                </p>
+                            }
+                            var bucketLocked = c.Mode == ColdStorageMode.ManagedHere && c.DiskLoaded;
+                            <div class="mb-2">
+                                <label class="form-label small" for="endpoint">Bucket URL, with a folder</label>
+                                <input id="endpoint" class="form-control form-control-sm" @bind="_endpoint" disabled="@bucketLocked"
+                                       placeholder="https://s3.us-west-004.backblazeb2.com/my-bucket/dg-siem/" autocomplete="off" spellcheck="false" />
+                                @if (bucketLocked)
+                                {
+                                    <div class="form-text">ClickHouse is using this bucket, so only the keys can change.</div>
+                                }
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="keyid">Access key ID</label>
+                                <input id="keyid" class="form-control form-control-sm" @bind="_accessKeyId" autocomplete="off" spellcheck="false" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small" for="secret">Secret access key</label>
+                                <input id="secret" type="password" class="form-control form-control-sm" @bind="_secret" autocomplete="new-password"
+                                       placeholder="@(c.Mode == ColdStorageMode.ManagedHere ? "Unchanged" : "")" />
+                            </div>
+                            <div class="d-flex gap-2 align-items-center mb-2">
+                                <button type="button" class="btn btn-sm btn-primary" disabled="@_busy" @onclick="SaveBucketAsync">
+                                    @(_busy ? "Testing the bucket…" : "Test and save")
+                                </button>
+                                @if (c.Mode == ColdStorageMode.ManagedHere)
+                                {
+                                    <button type="button" class="btn btn-sm btn-link" @onclick="() => _editBucket = false">Cancel</button>
+                                }
+                            </div>
+                            <p class="small text-body-secondary mb-3">
+                                ClickHouse writes and reads a small test file in the folder first, so a wrong URL or key is caught here. The keys need
+                                read, write, list and delete on the bucket.
+                            </p>
+                        }
+                        <Status Value="@_bucketOutcome" />
+                    }
+
+                    @if (_status?.TieredPolicyAvailable == true)
+                    {
+                        <div class="form-check form-switch mb-2">
+                            <input id="cold" class="form-check-input" type="checkbox" role="switch" @bind="_coldEnabled" />
+                            <label class="form-check-label" for="cold">Move older events to the bucket</label>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 small mb-2">
+                            <label for="coldafter">after</label>
+                            <input id="coldafter" type="number" min="1" class="form-control form-control-sm text-end" style="width: 6rem;" @bind="_coldAfter" disabled="@(!_coldEnabled)" />
+                            <span>days (Save under Retention to apply)</span>
+                        </div>
+                        <p class="small text-body-secondary mb-0">
+                            Searches read both tiers; older ranges are slower the first time and cached locally afterwards.
+                            Events stay in the bucket until their retention is up.
+                        </p>
+                    }
+                </div>
+            </section>
+
+            <section class="dg-panel">
+                <header><h2>Where events are</h2></header>
+                <div class="dg-body">
+                    @if (_status is { } s)
+                    {
+                        <table class="table table-sm mb-2">
+                            <thead><tr><th>Tier</th><th class="text-end">Events</th><th class="text-end">On disk</th><th>Oldest</th></tr></thead>
+                            <tbody>
+                                @foreach (var v in s.Volumes)
+                                {
+                                    <tr>
+                                        <td>@(v.Disk.StartsWith("s3", StringComparison.Ordinal) ? "Cold (S3)" : v.Disk == "default" ? "Hot (local)" : v.Disk)</td>
+                                        <td class="text-end">@v.Rows.ToString("N0", CultureInfo.InvariantCulture)</td>
+                                        <td class="text-end">@Bytes(v.BytesOnDisk)</td>
+                                        <td class="text-nowrap">@(v.Oldest?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "–")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        @foreach (var d in s.Disks.Where(d => d.TotalBytes > 0 && d.Name == "default")) // the disk events live on (not backups)
+                        {
+                            var low = d.FreeBytes < d.TotalBytes / 8;
+                            <div class="small @(low ? "text-warning" : "text-body-secondary")">
+                                @d.Name disk: @Bytes(d.FreeBytes) free of @Bytes(d.TotalBytes)
+                                @if (low)
+                                {
+                                    @(s.StoragePolicy == ClickHouseStorage.TieredPolicy
+                                        ? " — nearly full: under 10% free, ClickHouse moves data to the bucket early, newest included."
+                                        : " — nearly full: shorten retention or turn on cold storage.")
+                                }
+                            </div>
+                        }
+                        @if (s.PendingMutations > 0)
+                        {
+                            <div class="small mt-1">Re-stamping stored events: @s.PendingMutations job@(s.PendingMutations == 1 ? "" : "s") running in ClickHouse.</div>
+                        }
+                    }
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <section class="dg-panel mt-3">
+        <header><h2>What each source costs (last 7 days)</h2></header>
+        @if (_usage.Count == 0)
+        {
+            <div class="dg-body small">No events in the last 7 days.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr><th>Tenant</th><th>Dataset</th><th class="text-end">Events / day</th><th class="text-end">Size / day</th><th class="text-end">Kept</th><th class="text-end" title="Size per day × days kept, before compression (ClickHouse typically stores a fifth to a tenth of this)">Kept, raw</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var u in _usage.Take(60))
+                        {
+                            var days = Policy.DaysFor(u.Tenant, u.Dataset);
+                            <tr>
+                                <td>@u.Tenant</td>
+                                <td><a href="@($"search?q={Uri.EscapeDataString($"dataset={u.Dataset}")}&range=-7d&tenant={Uri.EscapeDataString(u.Tenant)}")">@u.Dataset</a></td>
+                                <td class="text-end">@((u.Events / 7d).ToString("N0", CultureInfo.InvariantCulture))</td>
+                                <td class="text-end">@Bytes(u.RawBytes / 7)</td>
+                                <td class="text-end">@days d</td>
+                                <td class="text-end">@Bytes(u.RawBytes / 7 * days)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private sealed class RuleRow
+    {
+        public string Tenant { get; set; } = string.Empty;
+        public string Dataset { get; set; } = string.Empty;
+        public int Days { get; set; } = 120;
+    }
+
+    private UserAccess? _access;
+    private List<RuleRow> _rules = [];
+    private int _defaultDays = 120;
+    private bool _coldEnabled;
+    private int _coldAfter = 30;
+    private StorageStatus? _status;
+    private IReadOnlyList<StorageUsage> _usage = [];
+    private bool _busy;
+    private bool _confirmApply;
+    private string? _error;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _outcome;
+    private ColdStorageStatus? _cold;
+    private bool _editBucket;
+    private string _endpoint = string.Empty;
+    private string _accessKeyId = string.Empty;
+    private string _secret = string.Empty;
+    private DreaminGeek.Siem.Web.Components.Widgets.Outcome? _bucketOutcome;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        Load(Retention.Current);
+        await RefreshAsync();
+    }
+
+    private void Load(RetentionSettings settings)
+    {
+        _defaultDays = settings.DefaultDays;
+        _coldEnabled = settings.ColdEnabled;
+        _coldAfter = settings.ColdAfterDays;
+        _rules = settings.Rules.Select(r => new RuleRow { Tenant = r.Tenant ?? string.Empty, Dataset = r.Dataset, Days = r.Days }).ToList();
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            _status = await Storage.GetStatusAsync(CancellationToken.None);
+            _usage = await Storage.GetUsageAsync(7, CancellationToken.None);
+            _cold = await Cold.GetStatusAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Couldn't read storage from ClickHouse: {ex.Message}";
+        }
+    }
+
+    private void EditBucket()
+    {
+        _endpoint = _cold?.Endpoint ?? string.Empty;
+        _accessKeyId = _cold?.AccessKeyId ?? string.Empty;
+        _secret = string.Empty;
+        _bucketOutcome = null;
+        _editBucket = true;
+    }
+
+    private async Task SaveBucketAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        _bucketOutcome = null;
+        try
+        {
+            var first = _cold?.Mode != ColdStorageMode.ManagedHere;
+            var endpoint = _cold is { Mode: ColdStorageMode.ManagedHere, DiskLoaded: true } ? _cold.Endpoint! : _endpoint;
+            await Cold.SaveAsync(endpoint, _accessKeyId, _secret.Length == 0 ? null : _secret, CancellationToken.None);
+            var warning = await Retention.ReapplyTieringAsync(CancellationToken.None);
+            _secret = string.Empty;
+            _editBucket = false;
+            _bucketOutcome = warning is { } w && _coldEnabled ? new(false, w)
+                : new(true, first ? "Bucket saved. Turn on Move older events to the bucket, choose after how many days, and Save under Retention." : "Keys saved; ClickHouse uses them now.");
+            await RefreshAsync();
+        }
+        catch (AdminException ex)
+        {
+            _bucketOutcome = new(false, ex.Message);
+            await RefreshAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _bucketOutcome = new(false, $"Couldn't save the bucket: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void AddRule() => _rules.Add(new RuleRow { Dataset = string.Empty, Days = _defaultDays });
+
+    private void ResetToSuggested()
+    {
+        Load(RetentionSettings.Suggested with { ColdEnabled = _coldEnabled, ColdAfterDays = _coldAfter });
+        _outcome = new(true, "Suggested rules loaded; Save to use them.");
+    }
+
+    private RetentionSettings Build() => new(_defaultDays,
+        _rules.Where(r => r.Dataset.Trim().Length > 0).Select(r => new RetentionRule(r.Tenant.Length == 0 ? null : r.Tenant, r.Dataset, r.Days)).ToList(),
+        _coldEnabled, _coldAfter);
+
+    private async Task SaveAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        _outcome = null;
+        try
+        {
+            var warning = await Retention.SaveAsync(Build(), CancellationToken.None);
+            Load(Retention.Current);
+            _outcome = warning is null ? new(true, "Saved. New events follow these rules now.") : new(false, warning);
+            await RefreshAsync();
+        }
+        catch (AdminException ex)
+        {
+            _outcome = new(false, ex.Message);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _outcome = new(false, $"Saved, but ClickHouse refused the change: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        _confirmApply = false;
+        try
+        {
+            await Retention.ApplyToStoredAsync(CancellationToken.None);
+            _outcome = new(true, "Re-stamping stored events in the background. Expired events are removed as ClickHouse merges, usually within a few hours.");
+            await RefreshAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _outcome = new(false, $"ClickHouse refused: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string Bytes(long bytes) => bytes switch
+    {
+        >= 1L << 40 => $"{bytes / (double)(1L << 40):0.0} TB",
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.0} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.0} MB",
+        >= 1L << 10 => $"{bytes / 1024d:0} KB",
+        _ => $"{bytes} B",
+    };
+}

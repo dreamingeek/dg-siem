@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <Authors>Dreamin Geek LLC</Authors>
+    <Company>Dreamin Geek LLC</Company>
+    <Product>DG SIEM</Product>
+    <Copyright>Copyright © Dreamin Geek LLC</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/dreamingeek/dg-siem</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Version>0.5.1</Version>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,315 @@
+@page "/admin/users"
+@rendermode InteractiveServer
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Security
+@inject AdminService Admin
+@inject TenantAccess Access
+@inject DreaminGeek.Siem.Web.Alerts.AlertAdminService AlertAdmin
+@inject TwoFactorPolicy Policy
+
+<PageTitle>Users · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Users</h1>
+    <p>Global admins see every tenant. Everyone else sees only the tenants they're granted.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+    @if (_password is not null)
+    {
+        <div class="alert alert-warning small" role="status">
+            <div class="mb-1">New password for <strong>@_passwordFor</strong>. Share it securely; it won't be shown again.</div>
+            <div class="input-group input-group-sm" style="max-width: 28rem;">
+                <input class="form-control dg-query" readonly value="@_password" aria-label="Generated password" />
+                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value); this.textContent='Copied';">Copy</button>
+                <button class="btn btn-outline-secondary" type="button" @onclick="() => _password = null">Done</button>
+            </div>
+        </div>
+    }
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6">
+            <section class="dg-panel h-100">
+                <header><h2>Add a user</h2></header>
+                <div class="dg-body">
+                    <form class="row g-2 align-items-end" @onsubmit="AddAsync" @onsubmit:preventDefault>
+                        <div class="col-sm-6">
+                            <label class="form-label small" for="email">Email</label>
+                            <input id="email" type="email" class="form-control form-control-sm" @bind="_email" />
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small" for="dname">Display name</label>
+                            <input id="dname" class="form-control form-control-sm" @bind="_displayName" />
+                        </div>
+                        <div class="col-sm-6">
+                            <div class="form-check">
+                                <input id="isadmin" type="checkbox" class="form-check-input" @bind="_globalAdmin" />
+                                <label class="form-check-label small" for="isadmin">Global admin (every tenant)</label>
+                            </div>
+                        </div>
+                        <div class="col-sm-6 text-end">
+                            <button class="btn btn-sm btn-primary" type="submit">Add user</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </div>
+        <div class="col-lg-6">
+            <section class="dg-panel h-100">
+                <header><h2>Grant tenant access</h2></header>
+                <div class="dg-body">
+                    <form class="row g-2 align-items-end" @onsubmit="GrantAsync" @onsubmit:preventDefault>
+                        <div class="col-sm-5">
+                            <label class="form-label small" for="guser">User</label>
+                            <select id="guser" class="form-select form-select-sm" @bind="_grantUser">
+                                <option value="">Choose…</option>
+                                @foreach (var u in _users.Where(u => !u.IsGlobalAdmin))
+                                {
+                                    <option value="@u.Id">@u.Email</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-sm-3">
+                            <label class="form-label small" for="gtenant">Tenant</label>
+                            <select id="gtenant" class="form-select form-select-sm" @bind="_grantTenant">
+                                @foreach (var t in _tenants)
+                                {
+                                    <option value="@t.Slug">@t.Slug</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small" for="grole">Role</label>
+                            <select id="grole" class="form-select form-select-sm" @bind="_grantRole">
+                                <option value="@TenantRole.Viewer">Viewer</option>
+                                <option value="@TenantRole.Admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-2 text-end">
+                            <button class="btn btn-sm btn-primary" type="submit" disabled="@(_grantUser.Length == 0)">Grant</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <section class="dg-panel mb-3">
+        <header><h2>Two-factor sign-in</h2></header>
+        <div class="dg-body d-flex gap-3 align-items-center flex-wrap">
+            <div class="form-check form-switch mb-0">
+                <input id="req2fa" type="checkbox" class="form-check-input" role="switch" checked="@_requireTwoFactor" @onchange="SetRequiredAsync" disabled="@(!_meHasTwoFactor && !_requireTwoFactor)" />
+                <label class="form-check-label" for="req2fa">Require an authenticator app for everyone</label>
+            </div>
+            <span class="small text-body-secondary">
+                @if (!_meHasTwoFactor && !_requireTwoFactor)
+                {
+                    <span>Set up two-factor on <a href="account/security">your own account</a> first.</span>
+                }
+                else if (_requireTwoFactor)
+                {
+                    <span>@_users.Count(u => !u.TwoFactor) of @_users.Count users still need to set it up; they're sent to set it up when they next sign in.</span>
+                }
+                else
+                {
+                    <span>@_users.Count(u => u.TwoFactor) of @_users.Count users have it on.</span>
+                }
+            </span>
+        </div>
+    </section>
+
+    <section class="dg-panel">
+        <div class="table-responsive">
+            <table class="table">
+                <thead><tr><th>User</th><th>Access</th><th>Two-factor</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var u in _users)
+                    {
+                        var isMe = u.Id == _access!.UserId;
+                        <tr>
+                            <td>
+                                <div>@u.DisplayName @(isMe ? "(you)" : "")</div>
+                                @if (u.DisplayName != u.Email)
+                                {
+                                    <div class="small text-body-secondary">@u.Email</div>
+                                }
+                            </td>
+                            <td>
+                                @if (u.IsGlobalAdmin)
+                                {
+                                    <span>Global admin</span>
+                                }
+                                else if (u.Grants.Count == 0)
+                                {
+                                    <span class="text-body-secondary">No tenants</span>
+                                }
+                                @foreach (var (tenant, role) in u.Grants)
+                                {
+                                    <span class="d-inline-flex align-items-center gap-1 me-2 px-2 border rounded small">
+                                        @tenant <span class="text-body-secondary">@role.ToString().ToLowerInvariant()</span>
+                                        <button type="button" class="btn btn-link btn-sm p-0 text-body-secondary text-decoration-none" title="Remove access to @tenant"
+                                                aria-label="Remove access to @tenant" @onclick="() => RevokeAsync(u, tenant)">×</button>
+                                    </span>
+                                }
+                            </td>
+                            <td class="text-nowrap">
+                                @if (u.TwoFactor)
+                                {
+                                    <span><span class="dg-dot dg-dot-ok"></span>On</span>
+                                }
+                                else
+                                {
+                                    <span class="text-body-secondary"><span class="dg-dot dg-dot-off"></span>Off</span>
+                                }
+                            </td>
+                            <td>@(u.Locked ? "Locked" : "Active")</td>
+                            <td class="text-end text-nowrap">
+                                @if (u.Locked)
+                                {
+                                    <button type="button" class="btn btn-sm btn-link" @onclick="() => UnlockAsync(u)">Unlock</button>
+                                }
+                                <button type="button" class="btn btn-sm btn-link" @onclick="() => ResetAsync(u)">Reset password</button>
+                                @if (u.TwoFactor && !isMe)
+                                {
+                                    @if (_confirmReset2fa == u.Id)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => ResetTwoFactorAsync(u)">Confirm reset</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link" title="For a lost phone: they sign in with just their password and set it up again" @onclick="() => _confirmReset2fa = u.Id">Reset two-factor</button>
+                                    }
+                                }
+                                @if (!isMe)
+                                {
+                                    <button type="button" class="btn btn-sm btn-link" @onclick="() => SetAdminAsync(u, !u.IsGlobalAdmin)">@(u.IsGlobalAdmin ? "Remove admin" : "Make admin")</button>
+                                    @if (_confirmDelete == u.Id)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(u)">Confirm delete</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmDelete = u.Id">Delete</button>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    <p class="small text-body-secondary mt-2">Resetting a password signs that user out everywhere. Five wrong passwords lock an account for 15 minutes.</p>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private IReadOnlyList<UserSummary> _users = [];
+    private IReadOnlyList<TenantSummary> _tenants = [];
+    private string? _error;
+    private string? _password;
+    private string? _passwordFor;
+    private Guid? _confirmDelete;
+    private Guid? _confirmReset2fa;
+    private bool _requireTwoFactor;
+    private bool _meHasTwoFactor;
+
+    private string _email = string.Empty;
+    private string _displayName = string.Empty;
+    private bool _globalAdmin;
+
+    private string _grantUser = string.Empty;
+    private string _grantTenant = string.Empty;
+    private TenantRole _grantRole = TenantRole.Viewer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _users = await Admin.ListUsersAsync(_access, CancellationToken.None);
+        _tenants = await Admin.ListTenantsAsync(_access, CancellationToken.None);
+        _requireTwoFactor = (await AlertAdmin.GetSettingsAsync(_access, CancellationToken.None)).General.RequireTwoFactor;
+        _meHasTwoFactor = _users.FirstOrDefault(u => u.Id == _access.UserId)?.TwoFactor == true;
+        if (_grantTenant.Length == 0 && _tenants.Count > 0)
+        {
+            _grantTenant = _tenants[0].Slug;
+        }
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        _error = null;
+        try
+        {
+            await action();
+            await LoadAsync();
+        }
+        catch (AdminException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private Task AddAsync() => Run(async () =>
+    {
+        _password = await Admin.AddUserAsync(_access, _email, _displayName, _globalAdmin, CancellationToken.None);
+        _passwordFor = _email.Trim();
+        _email = _displayName = string.Empty;
+        _globalAdmin = false;
+    });
+
+    private Task GrantAsync() => Run(() => Admin.GrantAsync(_access, Guid.Parse(_grantUser), _grantTenant, _grantRole, CancellationToken.None));
+
+    private Task RevokeAsync(UserSummary user, string tenant) => Run(() => Admin.RevokeAsync(_access, user.Id, tenant, CancellationToken.None));
+
+    private Task ResetTwoFactorAsync(UserSummary user) => Run(async () =>
+    {
+        await Admin.ResetTwoFactorAsync(_access, user.Id, CancellationToken.None);
+        Policy.Forget(user.Id);
+        _confirmReset2fa = null;
+    });
+
+    private Task SetRequiredAsync(ChangeEventArgs e) => Run(async () =>
+    {
+        var on = e.Value is true || string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        if (on && !_meHasTwoFactor)
+        {
+            throw new AdminException("Set up two-factor on your own account first, so you don't lock yourself out.");
+        }
+        var general = (await AlertAdmin.GetSettingsAsync(_access!, CancellationToken.None)).General;
+        await AlertAdmin.SaveGeneralAsync(_access!, general with { RequireTwoFactor = on }, CancellationToken.None);
+        Policy.Forget();
+    });
+
+    private Task UnlockAsync(UserSummary user) => Run(() => Admin.UnlockAsync(_access, user.Id, CancellationToken.None));
+
+    private Task ResetAsync(UserSummary user) => Run(async () =>
+    {
+        _password = await Admin.ResetPasswordAsync(_access, user.Id, CancellationToken.None);
+        _passwordFor = user.Email;
+    });
+
+    private Task SetAdminAsync(UserSummary user, bool admin) => Run(() => Admin.SetGlobalAdminAsync(_access!, user.Id, admin, CancellationToken.None));
+
+    private Task DeleteAsync(UserSummary user) => Run(async () =>
+    {
+        await Admin.DeleteUserAsync(_access!, user.Id, CancellationToken.None);
+        _confirmDelete = null;
+    });
+}

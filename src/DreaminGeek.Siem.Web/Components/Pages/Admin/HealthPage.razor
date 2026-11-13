@@ -1,0 +1,453 @@
+@page "/admin/health"
+@rendermode InteractiveServer
+@implements IDisposable
+@using System.Globalization
+@using DreaminGeek.Siem.Storage.ClickHouse
+@using DreaminGeek.Siem.Web.Agents
+@using DreaminGeek.Siem.Web.Alerts
+@using DreaminGeek.Siem.Web.Health
+@using DreaminGeek.Siem.Web.Security
+@using DreaminGeek.Siem.Web.Components.Widgets
+@inject HealthService Health
+@inject AlertAdminService Alerts
+@inject TenantAccess Access
+
+<PageTitle>Health · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Health</h1>
+    <p>Everything that has to work for logs to arrive, be kept and raise alerts.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger small" role="alert">@_error</div>
+    }
+    @if (_report is { } r)
+    {
+        var attention = r.Checks.Where(c => c.Level is CheckLevel.Bad or CheckLevel.Warn).ToList();
+        <div class="dg-health-head mb-3">
+            <div class="dg-health-verdict @(attention.Any(c => c.Level == CheckLevel.Bad) ? "is-bad" : attention.Count > 0 ? "is-warn" : "is-ok")" role="status">
+                @if (attention.Count == 0)
+                {
+                    <span>Everything is working.</span>
+                }
+                else
+                {
+                    <span>@(attention.Count == 1 ? "One thing needs" : $"{attention.Count} things need") attention: @string.Join(", ", attention.Select(c => c.Name.ToLowerInvariant())).</span>
+                }
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2 ms-md-auto">
+                <label class="visually-hidden" for="htenant">Tenant</label>
+                <select id="htenant" class="form-select form-select-sm" style="width: auto;" value="@(Tenant ?? "")" @onchange="OnTenant">
+                    <option value="">All tenants</option>
+                    @foreach (var t in _access!.Tenants)
+                    {
+                        <option value="@t">@t</option>
+                    }
+                </select>
+                <button type="button" class="btn btn-sm btn-link" disabled="@_loading" @onclick="LoadAsync">Refresh</button>
+                <span class="small text-body-secondary text-nowrap">@(_loading ? "Checking…" : $"Checked {Local(r.At)}")</span>
+            </div>
+        </div>
+
+        @if (r.QuietAlert is null || r.AgentAlert is null)
+        {
+            <div class="dg-callout mb-3">
+                <p class="mb-2">
+                    @if (r.QuietAlert is null && r.AgentAlert is null)
+                    {
+                        <span>Nothing tells you when a source goes quiet or an agent drops off unless you open this page.</span>
+                    }
+                    else
+                    {
+                        <span>@(r.QuietAlert is null ? "Quiet sources" : "Agent problems") don't raise an alert yet.</span>
+                    }
+                    Turn on the health alerts to get an email (to @(_email ?? "nobody: your login has no email address")) and an AlgaPSA ticket for each tenant when it happens.
+                </p>
+                <button type="button" class="btn btn-sm btn-primary" disabled="@_busy" @onclick="TurnOnAlertsAsync">Turn on health alerts</button>
+                <Status Value="@_alertOutcome" />
+            </div>
+        }
+        else if (_alertOutcome is not null)
+        {
+            <Status Value="@_alertOutcome" />
+        }
+
+        <div class="row g-3 mb-3">
+            <div class="col-xl-7">
+                <section class="dg-panel h-100">
+                    <header><h2>Checks</h2></header>
+                    <ul class="dg-checks">
+                        @foreach (var c in r.Checks)
+                        {
+                            <li class="dg-check-@c.Level.ToString().ToLowerInvariant()">
+                                <span class="dg-dot @Dot(c.Level)" aria-hidden="true"></span>
+                                <span class="dg-check-name">@c.Name</span>
+                                <span class="dg-check-detail">
+                                    <span class="visually-hidden">@LevelText(c.Level):</span>
+                                    @c.Detail
+                                    @if (c.Link is not null && c.Level is CheckLevel.Bad or CheckLevel.Warn)
+                                    {
+                                        <a href="@c.Link" class="ms-1">Fix</a>
+                                    }
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                </section>
+            </div>
+            <div class="col-xl-5">
+                <section class="dg-panel h-100">
+                    <header>
+                        <h2>Received, last 48 hours</h2>
+                        <span class="dg-aside">1 hour per bar</span>
+                    </header>
+                    <div class="dg-body">
+                        @if (r.Ingest.Count == 0)
+                        {
+                            <p class="small text-body-secondary mb-0">@(r.SourcesAvailable ? "Nothing received in the last 48 hours." : "Can't load while ClickHouse isn't answering.")</p>
+                        }
+                        else
+                        {
+                            <SignalStrip Buckets="_total" Span="TimeSpan.FromHours(1)" Label="Events received per hour, all tenants shown" />
+                            <table class="table table-sm mt-3 mb-0">
+                                <tbody>
+                                    @foreach (var (tenant, buckets, events) in _byTenant)
+                                    {
+                                        <tr>
+                                            <td style="width: 5rem;">@tenant</td>
+                                            <td><SignalStrip Buckets="buckets" Span="TimeSpan.FromHours(1)" Small="true" Label="@($"Events received per hour for {tenant}")" /></td>
+                                            <td class="num text-nowrap" style="width: 6rem;" title="Last 24 hours">@Short(events)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <section class="dg-panel mb-3">
+            <header>
+                <h2>Log sources</h2>
+                <span class="dg-aside">A host sending a dataset, judged on its own last 8 days</span>
+            </header>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>State</th>
+                            <th>Tenant</th>
+                            <th>Dataset</th>
+                            <th>Host</th>
+                            <th>Last event</th>
+                            <th title="The longest it went without events in its last 8 days; quiet means silent for about twice that.">Usually silent at most</th>
+                            <th class="num">Last 24 h</th>
+                            <th aria-label="Actions"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in _sources)
+                        {
+                            var ignored = r.Settings.IsIgnored(s.Key);
+                            <tr class="@(ignored ? "text-body-secondary" : "")">
+                                <td class="text-nowrap">
+                                    <span class="dg-dot @(ignored ? "dg-dot-off" : SourceDot(s.State))" aria-hidden="true"></span>@(ignored ? "Ignored" : SourceText(s.State))
+                                </td>
+                                <td>@s.Tenant</td>
+                                <td><a href="@SearchLink(s)">@s.Dataset</a></td>
+                                <td class="text-break">@s.Host</td>
+                                <td class="text-nowrap" title="@Local(s.LastSeen)">@HealthText.Duration(r.At - s.LastSeen) ago</td>
+                                <td class="text-nowrap">@(s.State is SourceState.New or SourceState.Irregular ? "–" : HealthText.UsualSilence(s.LongestSilence))</td>
+                                <td class="num text-nowrap" title="@($"Usually {s.UsualPerDay:N0} a day")">
+                                    @Short(s.Events24h)
+                                    @if (Change(s) is { } change)
+                                    {
+                                        <span class="@(change < 0 ? "text-warning" : "text-body-secondary") small ms-1">@(change > 0 ? "+" : "−")@Math.Abs(change)%</span>
+                                    }
+                                </td>
+                                <td class="text-end text-nowrap">
+                                    @if (ignored)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link py-0" disabled="@_busy" @onclick="() => IgnoreAsync(s, false)">Watch again</button>
+                                    }
+                                    else if (s.State == SourceState.Quiet)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link py-0" disabled="@_busy" @onclick="() => IgnoreAsync(s, true)"
+                                                title="Leave it out of quiet-source alerts, e.g. a retired device">Ignore</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        @if (_sources.Count == 0)
+                        {
+                            <tr><td colspan="8" class="text-body-secondary">@(r.SourcesAvailable ? "No events received yet." : "Can't load sources while ClickHouse isn't answering.")</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="dg-panel mb-3">
+            <header>
+                <h2>Agents</h2>
+                <a class="dg-aside" href="admin/agents">Manage</a>
+            </header>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Tenant</th>
+                            <th>Last check-in</th>
+                            <th>Version</th>
+                            <th title="Events in the agent's disk buffer, not yet delivered">Waiting to send</th>
+                            <th class="num" title="Events lost since the agent started: queue or buffer full">Lost</th>
+                            <th class="num" title="Batches the server refused, kept in the agent's buffer/rejected folder">Rejected</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in r.Agents.Where(a => a.State != AgentState.Revoked))
+                        {
+                            <tr>
+                                <td class="text-nowrap"><span class="dg-dot @AgentDot(a)" aria-hidden="true"></span>@a.Name</td>
+                                <td>@a.Tenant</td>
+                                <td class="text-nowrap" title="@(a.LastSeen is { } seen ? Local(seen) : "")">@AgentHealth.Ago(a.LastSeen)</td>
+                                <td>@a.Version</td>
+                                <td class="text-nowrap">@Backlog(a)</td>
+                                <td class="num @(a.Backlog is { } b && b.Dropped + b.Evicted > 0 ? "text-warning" : "")">@(a.Backlog is { } b1 ? Short(b1.Dropped + b1.Evicted) : "–")</td>
+                                <td class="num">@(a.Backlog is { } b2 ? b2.Rejected.ToString(CultureInfo.InvariantCulture) : "–")</td>
+                            </tr>
+                        }
+                        @if (!r.Agents.Any(a => a.State != AgentState.Revoked))
+                        {
+                            <tr><td colspan="7" class="text-body-secondary">No agents enrolled. <a href="admin/agents">Add one</a>.</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (r.Agents.Any(a => a.State != AgentState.Revoked && a.Backlog is null && a.State != AgentState.Offline))
+            {
+                <p class="small text-body-secondary px-3 pb-2 mb-0">Agents before 0.5 don't report what's waiting; they show it once they update.</p>
+            }
+        </section>
+    }
+    else if (_loading)
+    {
+        <p class="text-body-secondary">Checking…</p>
+    }
+    <p class="small text-body-secondary mt-3 mb-0">DG SIEM @(typeof(HealthService).Assembly.GetName().Version?.ToString(3) ?? "?")</p>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    [SupplyParameterFromQuery(Name = "tenant")]
+    private string? Tenant { get; set; }
+
+    private UserAccess? _access;
+    private string? _email;
+    private HealthReport? _report;
+    private IReadOnlyList<SourceHealth> _sources = [];
+    private List<SignalBucket> _total = [];
+    private List<(string Tenant, List<SignalBucket> Buckets, long Events)> _byTenant = [];
+    private TimeZoneInfo _zone = TimeZoneInfo.Utc;
+    private bool _loading;
+    private bool _busy;
+    private string? _error;
+    private Outcome? _alertOutcome;
+    private Timer? _timer;
+
+    [Inject] private DreaminGeek.Siem.Alerting.SettingsStore Settings { get; set; } = default!;
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthState).User;
+        _access = await Access.GetAsync(user, CancellationToken.None);
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _email = user.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+            ?? (user.Identity?.Name is { } name && name.Contains('@', StringComparison.Ordinal) ? name : null);
+        _zone = (await Settings.GetGeneralAsync(CancellationToken.None)).Zone;
+        await LoadAsync();
+        // Keep it current while it's open.
+        _timer = new Timer(_ => InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        }), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+    }
+
+    private IReadOnlyCollection<string> Tenants =>
+        !string.IsNullOrEmpty(Tenant) && _access!.Tenants.Contains(Tenant) ? [Tenant] : _access!.Tenants;
+
+    private async Task LoadAsync()
+    {
+        if (_access?.IsGlobalAdmin != true || _loading)
+        {
+            return;
+        }
+        _loading = true;
+        try
+        {
+            var report = await Health.GetAsync(Tenants, CancellationToken.None);
+            var ignored = report.Settings;
+            _sources = report.Sources
+                .OrderBy(s => ignored.IsIgnored(s.Key) ? 3 : s.State switch { SourceState.Quiet => 0, SourceState.Active => 1, _ => 2 })
+                .ThenBy(s => s.Tenant, StringComparer.Ordinal).ThenBy(s => s.Dataset, StringComparer.Ordinal).ThenBy(s => s.Host, StringComparer.Ordinal)
+                .ToList();
+            var from = report.At.AddHours(-47);
+            _total = SignalBucket.Fill(from, report.At, TimeSpan.FromHours(1),
+                report.Ingest.GroupBy(h => h.Hour.UtcDateTime).ToDictionary(g => g.Key, g => g.Sum(h => h.Events)));
+            _byTenant = report.Ingest.GroupBy(h => h.Tenant).OrderBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => (g.Key,
+                    SignalBucket.Fill(from, report.At, TimeSpan.FromHours(1), g.ToDictionary(h => h.Hour.UtcDateTime, h => h.Events)),
+                    g.Where(h => h.Hour > report.At.AddDays(-1)).Sum(h => h.Events)))
+                .ToList();
+            _report = report;
+            _error = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Couldn't run the checks: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnTenant(ChangeEventArgs e)
+    {
+        var value = e.Value as string;
+        Nav.NavigateTo(string.IsNullOrEmpty(value) ? "admin/health" : $"admin/health?tenant={Uri.EscapeDataString(value)}", replace: true);
+        Tenant = string.IsNullOrEmpty(value) ? null : value;
+        await LoadAsync();
+    }
+
+    private async Task IgnoreAsync(SourceHealth source, bool ignore)
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        _busy = true;
+        try
+        {
+            await Health.SetIgnoredAsync(source.Key, ignore, _email ?? _access.UserId.ToString(), CancellationToken.None);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TurnOnAlertsAsync()
+    {
+        if (_access?.IsGlobalAdmin != true || _report is null)
+        {
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var existing = (await Alerts.ListRulesAsync(_access, CancellationToken.None)).Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var added = 0;
+            foreach (var template in SecurityAlerts.All.Where(t => t.Group == SecurityAlerts.Health && !existing.Contains(t.Name)))
+            {
+                await Alerts.SaveRuleAsync(_access, SecurityAlerts.ToForm(template, _email), CancellationToken.None);
+                added++;
+            }
+            _alertOutcome = added > 0
+                ? new(true, $"Health alerts are on: quiet sources every 15 minutes, agents every 5. Change them under Alerts.")
+                : new(false, "The health alerts already exist but are turned off. Turn them on under Alerts.");
+            await LoadAsync();
+        }
+        catch (DreaminGeek.Siem.Web.Admin.AdminException ex)
+        {
+            _alertOutcome = new(false, ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string Local(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, _zone).ToString("ddd d MMM HH:mm", CultureInfo.InvariantCulture);
+
+    private static string SearchLink(SourceHealth s) =>
+        $"search?q={Uri.EscapeDataString($"dataset={s.Dataset}")}&tenant={Uri.EscapeDataString(s.Tenant)}&range=-24h";
+
+    /// <summary>The last day against the usual day, when it's a big enough difference to notice.</summary>
+    private static int? Change(SourceHealth s)
+    {
+        if (s.UsualPerDay < 100 || s.State is SourceState.New or SourceState.Irregular)
+        {
+            return null;
+        }
+        var change = (int)Math.Round(100 * (s.Events24h - s.UsualPerDay) / s.UsualPerDay);
+        return Math.Abs(change) >= 50 ? change : null;
+    }
+
+    private static string Backlog(AgentStatus a) => a.Backlog switch
+    {
+        null => "–",
+        { PendingSegments: 0 } => "nothing",
+        { OldestPending: { } oldest } b => $"{HealthText.Bytes(b.PendingBytes)}, oldest {HealthText.Duration(oldest)}",
+        var b => HealthText.Bytes(b.PendingBytes),
+    };
+
+    private static string Short(long n) => n switch
+    {
+        >= 10_000_000 => $"{n / 1_000_000d:0}M",
+        >= 1_000_000 => $"{n / 1_000_000d:0.0}M",
+        >= 10_000 => $"{n / 1000d:0}k",
+        _ => n.ToString("N0", CultureInfo.InvariantCulture),
+    };
+
+    private static string Dot(CheckLevel level) => level switch
+    {
+        CheckLevel.Ok => "dg-dot-ok",
+        CheckLevel.Warn => "dg-dot-warn",
+        CheckLevel.Bad => "dg-dot-bad",
+        _ => "dg-dot-off",
+    };
+
+    private static string LevelText(CheckLevel level) => level switch
+    {
+        CheckLevel.Ok => "OK",
+        CheckLevel.Warn => "Needs attention",
+        CheckLevel.Bad => "Problem",
+        _ => "Not set up",
+    };
+
+    private static string SourceDot(SourceState state) => state switch
+    {
+        SourceState.Active => "dg-dot-ok",
+        SourceState.Quiet => "dg-dot-warn",
+        _ => "dg-dot-off",
+    };
+
+    private static string SourceText(SourceState state) => state switch
+    {
+        SourceState.Active => "Sending",
+        SourceState.Quiet => "Quiet",
+        SourceState.New => "New",
+        _ => "Occasional",
+    };
+
+    private static string AgentDot(AgentStatus a) =>
+        a.State == AgentState.Offline ? "dg-dot-bad"
+        : a.State == AgentState.Late || a.Backlog?.OldestPending >= HealthAlertSource.StuckBacklog ? "dg-dot-warn"
+        : "dg-dot-ok";
+
+    public void Dispose() => _timer?.Dispose();
+}

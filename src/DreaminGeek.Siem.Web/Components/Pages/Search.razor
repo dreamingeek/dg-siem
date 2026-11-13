@@ -1,0 +1,690 @@
+@page "/search"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using DreaminGeek.Siem.Data.Entities
+@using DreaminGeek.Siem.Query
+@using DreaminGeek.Siem.Web.Search
+@using DreaminGeek.Siem.Web.Security
+@inject SearchService Searcher
+@inject SavedSearchService Saved
+@inject TenantAccess Access
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject DreaminGeek.Siem.Web.Dashboards.DashboardService DashboardSvc
+
+<PageTitle>Search · DG SIEM</PageTitle>
+
+@if (_access is { Tenants.Count: 0 })
+{
+    <div class="alert alert-secondary mt-3">
+        Your account doesn't have access to any tenants yet. Ask an admin to run
+        <code>dg-siem-server user grant &lt;your email&gt; &lt;tenant&gt;</code>.
+    </div>
+}
+else if (_access is not null)
+{
+    <form class="mb-2" @onsubmit="SubmitAsync" @onsubmit:preventDefault>
+        <div class="input-group">
+            <input class="form-control dg-query" @bind="_query" @bind:event="oninput" spellcheck="false" autocomplete="off" data-dg-assist
+                   role="combobox" aria-autocomplete="list" aria-expanded="false"
+                   placeholder="dataset=unifi.firewall | top src" aria-label="Query" />
+            @if (_access.Tenants.Count > 1)
+            {
+                <select class="form-select flex-grow-0 w-auto" @bind="_tenant" aria-label="Tenant">
+                    <option value="">All tenants</option>
+                    @foreach (var t in _access.Tenants)
+                    {
+                        <option value="@t">@t</option>
+                    }
+                </select>
+            }
+            <select class="form-select flex-grow-0 w-auto" @bind="_range" @bind:after="ClearCustomRange" aria-label="Time range">
+                @if (_customFrom is not null)
+                {
+                    <option value="custom">@CustomLabel()</option>
+                }
+                @foreach (var (value, label) in Ranges)
+                {
+                    <option value="@value">@label</option>
+                }
+            </select>
+            <button class="btn btn-primary" type="submit" disabled="@_running">@(_running ? "Searching…" : "Search")</button>
+        </div>
+    </form>
+
+    <div class="d-flex gap-2 align-items-center mb-2 small">
+        <details class="position-relative">
+            <summary class="btn btn-sm btn-outline-secondary">Saved searches (@_saved.Count)</summary>
+            <div class="position-absolute dg-panel p-2 mt-1" style="z-index: 1050; min-width: 22rem; max-height: 50vh; overflow: auto;">
+                @if (_saved.Count == 0)
+                {
+                    <div class="text-muted p-1">Nothing saved yet.</div>
+                }
+                @foreach (var s in _saved)
+                {
+                    <div class="d-flex align-items-center gap-2 py-1 border-bottom">
+                        <button type="button" class="btn btn-link btn-sm text-start p-0 flex-grow-1 text-truncate" title="@s.Query" @onclick="() => LoadSaved(s)">@s.Name</button>
+                        <span class="text-muted">@RangeLabel(s.TimeRange)</span>
+                        @if (s.OwnerId == _access.UserId || _access.IsGlobalAdmin)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-danger py-0" title="Delete" @onclick="() => DeleteSavedAsync(s)">×</button>
+                        }
+                    </div>
+                }
+            </div>
+        </details>
+        @if (_showSave)
+        {
+            <form class="d-flex gap-1" @onsubmit="SaveAsync" @onsubmit:preventDefault>
+                <input class="form-control form-control-sm" style="width: 16rem;" placeholder="Name" @bind="_saveName" @bind:event="oninput" />
+                <button class="btn btn-sm btn-success" type="submit" disabled="@string.IsNullOrWhiteSpace(_saveName)">Save</button>
+                <button class="btn btn-sm btn-link" type="button" @onclick="() => _showSave = false">Cancel</button>
+            </form>
+        }
+        else if (_dashAdd is not null)
+        {
+            <form class="d-flex gap-1 flex-wrap" @onsubmit="AddToDashboardAsync" @onsubmit:preventDefault>
+                <select class="form-select form-select-sm" style="width: auto;" aria-label="Dashboard" @bind="_dashAdd.DashboardId">
+                    @foreach (var d in _dashAdd.Dashboards)
+                    {
+                        <option value="@d.Id">@d.Name</option>
+                    }
+                </select>
+                <input class="form-control form-control-sm" style="width: 14rem;" placeholder="Panel title" aria-label="Panel title" @bind="_dashAdd.Title" @bind:event="oninput" />
+                <select class="form-select form-select-sm" style="width: auto;" aria-label="Show as" @bind="_dashAdd.Kind">
+                    @foreach (var kind in Enum.GetValues<DreaminGeek.Siem.Web.Dashboards.PanelKind>())
+                    {
+                        <option value="@kind">@DreaminGeek.Siem.Web.Dashboards.DashboardPanel.Describe(kind)</option>
+                    }
+                </select>
+                <button class="btn btn-sm btn-success" type="submit" disabled="@(string.IsNullOrWhiteSpace(_dashAdd.Title) || _dashAdd.DashboardId == Guid.Empty)">Add</button>
+                <button class="btn btn-sm btn-link" type="button" @onclick="() => _dashAdd = null">Cancel</button>
+            </form>
+        }
+        else if (!string.IsNullOrWhiteSpace(_query))
+        {
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _showSave = true">Save search</button>
+            @if (_access?.IsGlobalAdmin == true)
+            {
+                <a class="btn btn-sm btn-outline-secondary" href="@AlertLink">Create alert</a>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="StartAddToDashboardAsync">Add to dashboard</button>
+            }
+        }
+        @if (_dashNotice is { } added)
+        {
+            <span class="text-success">Added to <a href="@($"dashboards/{added.Id}")">@added.Name</a>.</span>
+        }
+        @if (_notice is not null)
+        {
+            <span class="text-success">@_notice</span>
+        }
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger font-monospace small" role="alert">
+            @_error
+            @if (_errorPosition is int pos)
+            {
+                <pre class="mb-0 mt-2">@_ranQuery
+@(new string(' ', Math.Min(pos, _ranQuery.Length)))^</pre>
+            }
+        </div>
+    }
+
+    @if (_result is { } r)
+    {
+        <div class="row g-3">
+            @if (r.Shape == ResultShape.Events)
+            {
+                <aside class="col-lg-3 col-xl-2 dg-fields" aria-label="Field values">
+                    @if (_summaryLoading)
+                    {
+                        <p class="text-body-secondary">Counting field values…</p>
+                    }
+                    @foreach (var field in _summary)
+                    {
+                        <section>
+                            <h3 title="@field.Field">@field.Field</h3>
+                            @foreach (var (value, count) in field.Values)
+                            {
+                                <div class="dg-val">
+                                    <button type="button" title="Show only @field.Field=&quot;@value&quot;" @onclick="() => Filter(field.Field, value, false)">@value</button>
+                                    <span class="dg-count">@count.ToString("N0", CultureInfo.InvariantCulture)</span>
+                                    <button type="button" title="Exclude @field.Field=&quot;@value&quot;" aria-label="Exclude @value" @onclick="() => Filter(field.Field, value, true)">−</button>
+                                </div>
+                            }
+                        </section>
+                    }
+                </aside>
+            }
+            <section class="@(r.Shape == ResultShape.Events ? "col-lg-9 col-xl-10" : "col-12")">
+                @if (r.Shape == ResultShape.Events && _histogram.Count > 0)
+                {
+                    <div class="mb-2">
+                        <SignalStrip Buckets="_histogram" Span="_histogramSpan" OnSelect="ZoomTo" Label="Matching events over time; select a bar to zoom in" />
+                    </div>
+                }
+                <div class="dg-meta">
+                    <span>@r.Rows.Count.ToString("N0", CultureInfo.InvariantCulture) @(r.Shape == ResultShape.Events ? "events shown" : "rows")@(r.Truncated ? ", limited: refine the search or add | head N" : "")</span>
+                    <span>@r.Elapsed.TotalMilliseconds.ToString("N0", CultureInfo.InvariantCulture) ms</span>
+                    @if (r.Shape == ResultShape.Events && _clickable)
+                    {
+                        <span>Select an event for details</span>
+                    }
+                </div>
+
+                @if (r.Shape == ResultShape.Timechart)
+                {
+                    <div @ref="_chartElement" class="dg-panel mb-3 p-2" style="height: 340px;"></div>
+                }
+
+                <div class="dg-results">
+                    <table class="table table-hover @(_clickable ? "dg-clickable" : "") @(r.Shape == ResultShape.Events ? "" : "dg-table-fit")">
+                        <thead>
+                            <tr>
+                                @for (var c = 0; c < r.Columns.Count; c++)
+                                {
+                                    <th class="text-nowrap @(_rows.Count > 0 && IsNumber(_rows[0].Values[c]) ? "text-end" : "")">@r.Columns[c]</th>
+                                }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <Virtualize Items="_rows" Context="row" ItemSize="29">
+                                <tr @onclick="() => OpenEventAsync(row)">
+                                    @for (var i = 0; i < row.Values.Length; i++)
+                                    {
+                                        var column = r.Columns[i];
+                                        var text = SearchService.Format(row.Values[i]);
+                                        @if (column == "log.level")
+                                        {
+                                            <td><span class="dg-sev dg-sev-@text">@text</span></td>
+                                        }
+                                        else if (text.Length == 0 && r.Shape != ResultShape.Events)
+                                        {
+                                            <td class="text-nowrap dg-empty">(empty)</td>
+                                        }
+                                        else
+                                        {
+                                            <td class="@CellClass(column, row.Values[i])">@text</td>
+                                        }
+                                    }
+                                </tr>
+                            </Virtualize>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    }
+}
+
+@if (_detail is not null || _detailLoading)
+{
+    <div class="modal d-block" tabindex="-1" role="dialog" style="background: rgba(0,0,0,.4);" @onclick="CloseDetail">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title h5">
+                        @if (_detail is { } d)
+                        {
+                            <span>@d.HostName <span class="text-body-secondary fw-normal ms-2">@d.Tenant, @d.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) UTC</span></span>
+                        }
+                        else
+                        {
+                            <span>Loading…</span>
+                        }
+                    </h2>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseDetail"></button>
+                </div>
+                @if (_detail is { } detail)
+                {
+                    <div class="modal-body small">
+                        <ul class="nav nav-tabs mb-3">
+                            <li class="nav-item"><button type="button" class="nav-link @(_tab == 0 ? "active" : "")" @onclick="() => _tab = 0">Fields</button></li>
+                            <li class="nav-item"><button type="button" class="nav-link @(_tab == 1 ? "active" : "")" @onclick="() => _tab = 1">Raw</button></li>
+                            <li class="nav-item"><button type="button" class="nav-link @(_tab == 2 ? "active" : "")" @onclick="() => _tab = 2">Surrounding events (@detail.HostName)</button></li>
+                        </ul>
+                        @if (_tab == 0)
+                        {
+                            <table class="table table-sm">
+                                <tbody>
+                                    @foreach (var (field, value) in detail.Fields)
+                                    {
+                                        <tr>
+                                            <th class="text-nowrap" style="width: 1%;">@field</th>
+                                            <td class="dg-log">@value</td>
+                                            <td class="text-nowrap" style="width: 1%;">
+                                                <button type="button" class="btn btn-link btn-sm p-0" title="Filter on this value" @onclick="() => FilterFromDetail(field, value, false)">+</button>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2" title="Exclude this value" @onclick="() => FilterFromDetail(field, value, true)">−</button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        else if (_tab == 1)
+                        {
+                            <pre class="dg-raw">@detail.Raw</pre>
+                        }
+                        else
+                        {
+                            @if (_context.Count == 0)
+                            {
+                                <div class="text-muted">No other events from this host within 6 hours.</div>
+                            }
+                            <table class="table table-sm">
+                                <tbody>
+                                    @foreach (var (time, level, dataset, message, isThis) in _context)
+                                    {
+                                        <tr style="@(isThis ? "background: var(--dg-amber-soft);" : "")" aria-current="@(isThis ? "true" : null)">
+                                            <td class="text-nowrap">@time</td>
+                                            <td><span class="dg-sev dg-sev-@level">@level</span></td>
+                                            <td class="text-nowrap">@dataset</td>
+                                            <td class="dg-log">@message</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly (string Value, string Label)[] Ranges =
+        [("-15m", "Last 15 minutes"), ("-1h", "Last hour"), ("-4h", "Last 4 hours"), ("-24h", "Last 24 hours"), ("-7d", "Last 7 days"), ("-30d", "Last 30 days"), ("-120d", "Last 120 days"), ("-365d", "Last year")];
+
+    [SupplyParameterFromQuery(Name = "q")]
+    private string? Q { get; set; }
+
+    [SupplyParameterFromQuery(Name = "range")]
+    private string? RangeParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "tenant")]
+    private string? TenantParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "from")]
+    private string? FromParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "to")]
+    private string? ToParam { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private UserAccess? _access;
+    private string _query = string.Empty;
+    private string _ranQuery = string.Empty;
+    private string _range = "-24h";
+    private string _tenant = string.Empty;
+    private DateTimeOffset? _customFrom;
+    private DateTimeOffset? _customTo;
+    private List<SignalBucket> _histogram = [];
+    private TimeSpan _histogramSpan = TimeSpan.FromMinutes(15);
+    private string? _lastKey;
+    private bool _running;
+    private string? _error;
+    private int? _errorPosition;
+    private string? _notice;
+    private QueryResult? _result;
+    private List<ResultRow> _rows = [];
+    private bool _clickable;
+
+    private IReadOnlyList<FieldValues> _summary = [];
+    private bool _summaryLoading;
+    private int _searchVersion;
+
+    private IReadOnlyList<SavedSearch> _saved = [];
+    private bool _showSave;
+    private string _saveName = string.Empty;
+
+    private sealed class DashboardAdd
+    {
+        public IReadOnlyList<DreaminGeek.Siem.Web.Dashboards.DashboardSummary> Dashboards { get; init; } = [];
+        public Guid DashboardId { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public DreaminGeek.Siem.Web.Dashboards.PanelKind Kind { get; set; }
+    }
+
+    private DashboardAdd? _dashAdd;
+    private (Guid Id, string Name)? _dashNotice;
+
+    /// <summary>Opens the inline "Add to dashboard" form, guessing a panel type from the current result.</summary>
+    private async Task StartAddToDashboardAsync()
+    {
+        _dashNotice = null;
+        var dashboards = await DashboardSvc.ListAsync(_access!, CancellationToken.None);
+        if (dashboards.Count == 0)
+        {
+            _error = "Create a dashboard first (Dashboards → New dashboard), then add searches to it.";
+            return;
+        }
+        var kind = _result switch
+        {
+            { Shape: ResultShape.Timechart } => DreaminGeek.Siem.Web.Dashboards.PanelKind.TimeBars,
+            { Shape: ResultShape.Table, Rows.Count: 1, Columns.Count: 1 } => DreaminGeek.Siem.Web.Dashboards.PanelKind.Stat,
+            { Shape: ResultShape.Table, Columns.Count: 2 or 3 } => DreaminGeek.Siem.Web.Dashboards.PanelKind.Bars,
+            _ => DreaminGeek.Siem.Web.Dashboards.PanelKind.Table,
+        };
+        _dashAdd = new DashboardAdd { Dashboards = dashboards, DashboardId = dashboards[0].Id, Kind = kind };
+    }
+
+    private async Task AddToDashboardAsync()
+    {
+        if (_dashAdd is null)
+        {
+            return;
+        }
+        try
+        {
+            var (w, h) = DreaminGeek.Siem.Web.Dashboards.DashboardPanel.DefaultSize(_dashAdd.Kind);
+            await DashboardSvc.AddPanelAsync(_access!, _dashAdd.DashboardId, new DreaminGeek.Siem.Web.Dashboards.DashboardPanel
+            {
+                Title = _dashAdd.Title, Query = _query, Kind = _dashAdd.Kind, W = w, H = h,
+            }, CancellationToken.None);
+            var name = _dashAdd.Dashboards.First(d => d.Id == _dashAdd.DashboardId).Name;
+            _dashNotice = (_dashAdd.DashboardId, name);
+            _dashAdd = null;
+        }
+        catch (DreaminGeek.Siem.Web.Admin.AdminException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    /// <summary>The alert editor, prefilled with this search.</summary>
+    private string AlertLink =>
+        $"alerts/new?q={Uri.EscapeDataString(_query)}&tenant={Uri.EscapeDataString(_tenant)}" +
+        $"&range={Uri.EscapeDataString(_range is "custom" or "-30d" or "-120d" or "-365d" ? "-15m" : _range)}";
+
+    private EventDetail? _detail;
+    private bool _detailLoading;
+    private int _tab;
+    private List<(string Time, string Level, string Dataset, string Message, bool IsThis)> _context = [];
+
+    private ElementReference _chartElement;
+    private IJSObjectReference? _charts;
+    private object? _pendingChart;
+
+    private sealed record ResultRow(object?[] Values);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (_access is not null)
+        {
+            _saved = await Saved.ListAsync(_access, CancellationToken.None);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _customFrom = ParseIso(FromParam);
+        _customTo = ParseIso(ToParam);
+        if (_customFrom is null || _customTo is null || _customTo <= _customFrom)
+        {
+            _customFrom = _customTo = null;
+        }
+        _range = _customFrom is not null ? "custom" : Ranges.Any(r => r.Value == RangeParam) ? RangeParam! : "-24h";
+        _tenant = TenantParam ?? string.Empty;
+        _query = Q ?? string.Empty;
+        var key = Key(_query, _range + FromParam + ToParam, _tenant);
+        if (Q is not null && key != _lastKey)
+        {
+            _lastKey = key;
+            await RunAsync();
+        }
+    }
+
+    private static string Key(string q, string range, string tenant) => $"{q}\u0001{range}\u0001{tenant}";
+
+    /// <summary>Searches go through the URL so they can be bookmarked and the back button works.</summary>
+    private async Task SubmitAsync()
+    {
+        if (Key(_query, _range + (_customFrom is null ? "" : FromParam + ToParam), _tenant) == _lastKey)
+        {
+            await RunAsync(); // same search again: refresh
+            return;
+        }
+        Navigate(_query, _range, _tenant);
+    }
+
+    private void Navigate(string query, string range, string tenant)
+    {
+        var custom = range == "custom" && _customFrom is not null && _customTo is not null;
+        var parameters = new Dictionary<string, object?>
+        {
+            ["q"] = query,
+            ["range"] = custom ? null : range,
+            ["from"] = custom ? _customFrom!.Value.UtcDateTime.ToString("o", CultureInfo.InvariantCulture) : null,
+            ["to"] = custom ? _customTo!.Value.UtcDateTime.ToString("o", CultureInfo.InvariantCulture) : null,
+            ["tenant"] = tenant.Length > 0 ? tenant : null,
+        };
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters("search", parameters));
+    }
+
+    private async Task RunAsync()
+    {
+        var version = ++_searchVersion;
+        _running = true;
+        _error = null;
+        _errorPosition = null;
+        _notice = null;
+        _summary = [];
+        _ranQuery = _query;
+        StateHasChanged();
+        try
+        {
+            // Re-resolved on every search so revoked access applies without a reload.
+            _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+            if (_access is null)
+            {
+                _error = "Your session has expired. Reload the page to sign in again.";
+                return;
+            }
+            var tenants = TenantAccess.Narrow(_access, _tenant.Length > 0 ? [_tenant] : null);
+            var now = DateTimeOffset.UtcNow;
+            var from = _customFrom ?? SearchService.ParseTime(_range, now, now.AddHours(-24));
+            var to = _customTo ?? now;
+            var response = await Searcher.RunAsync(_query, from, to, tenants, CancellationToken.None);
+            if (version != _searchVersion)
+            {
+                return; // a newer search started meanwhile
+            }
+
+            _result = response.Result;
+            _rows = response.Result?.Rows.Select(v => new ResultRow(v)).ToList() ?? [];
+            _error = response.Error;
+            _errorPosition = response.ErrorPosition;
+            _clickable = _result is { Shape: ResultShape.Events } res &&
+                         new[] { "event.id", "@timestamp", "tenant", "host.name" }.All(c => res.Columns.Contains(c));
+            _pendingChart = _result is { Shape: ResultShape.Timechart } chart ? BuildChart(chart) : null;
+
+            _histogram = [];
+            if (_result is { Shape: ResultShape.Events })
+            {
+                _summaryLoading = true;
+                _running = false;
+                StateHasChanged();
+                _histogramSpan = SignalBucket.SpanFor(to - from);
+                var histogramTask = Searcher.RunAsync($"{_query.TrimEnd()} | timechart span={SignalBucket.SpanText(_histogramSpan)} count",
+                    from, to, tenants, CancellationToken.None);
+                var summary = await Searcher.SummarizeAsync(_query, from, to, tenants, CancellationToken.None);
+                var histogram = await histogramTask;
+                if (version == _searchVersion)
+                {
+                    _summary = summary;
+                    // Queries ending in head/table can't be charted; then there's simply no strip.
+                    _histogram = histogram.Result is { } h
+                        ? SignalBucket.Fill(from, to, _histogramSpan, h.Rows.Where(x => x[0] is DateTime)
+                            .ToDictionary(x => DateTime.SpecifyKind((DateTime)x[0]!, DateTimeKind.Utc), x => Convert.ToInt64(x[1], CultureInfo.InvariantCulture)))
+                        : [];
+                }
+            }
+        }
+        finally
+        {
+            if (version == _searchVersion)
+            {
+                _running = false;
+                _summaryLoading = false;
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pendingChart is { } data && _result is { Shape: ResultShape.Timechart })
+        {
+            _pendingChart = null;
+            _charts ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+            await _charts.InvokeVoidAsync("render", _chartElement, data);
+        }
+    }
+
+    private static object BuildChart(QueryResult r) => DreaminGeek.Siem.Web.Dashboards.PanelData.Timechart(r);
+
+    /// <summary>Clicking a histogram bar narrows the time range to that bucket.</summary>
+    private void ZoomTo(DateTime bucketStart)
+    {
+        _customFrom = new DateTimeOffset(DateTime.SpecifyKind(bucketStart, DateTimeKind.Utc));
+        _customTo = _customFrom + _histogramSpan;
+        Navigate(_query, "custom", _tenant);
+    }
+
+    private void ClearCustomRange()
+    {
+        if (_range != "custom")
+        {
+            _customFrom = _customTo = null;
+        }
+    }
+
+    private string CustomLabel() =>
+        _customFrom is { } f && _customTo is { } t
+            ? $"{f.UtcDateTime.ToString("MMM d HH:mm", CultureInfo.InvariantCulture)} to {t.UtcDateTime.ToString(f.Date == t.Date ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture)} UTC"
+            : "Custom";
+
+    private static DateTimeOffset? ParseIso(string? value) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var t) ? t : null;
+
+    private void Filter(string field, string value, bool exclude) =>
+        Navigate(SearchService.AddFilter(_query, field, value, exclude), _range, _tenant);
+
+    private void FilterFromDetail(string field, string value, bool exclude)
+    {
+        CloseDetail();
+        Filter(field, value, exclude);
+    }
+
+    private async Task OpenEventAsync(ResultRow row)
+    {
+        if (!_clickable || _result is not { } r || _access is null)
+        {
+            return;
+        }
+        string Get(string column) => SearchService.Format(row.Values[r.ColumnIndex(column)]);
+        if (!Guid.TryParse(Get("event.id"), out var id) || row.Values[r.ColumnIndex("@timestamp")] is not DateTime timestamp)
+        {
+            return;
+        }
+
+        _detailLoading = true;
+        _detail = null;
+        _tab = 0;
+        _context = [];
+        StateHasChanged();
+        try
+        {
+            var tenant = Get("tenant");
+            var host = Get("host.name");
+            _detail = await Searcher.GetEventAsync(id, tenant, timestamp, _access.Tenants, CancellationToken.None);
+            var (before, after) = await Searcher.SurroundingAsync(tenant, host, timestamp, 15, _access.Tenants, CancellationToken.None);
+            _context = ContextRows(before, reverse: true).Concat(ContextRows(after, reverse: false))
+                .Select(c => (c.Time, c.Level, c.Dataset, c.Message, c.Id == id.ToString())).ToList();
+        }
+        finally
+        {
+            _detailLoading = false;
+        }
+    }
+
+    private static IEnumerable<(string Time, string Level, string Dataset, string Message, string Id)> ContextRows(QueryResult? result, bool reverse)
+    {
+        if (result is null)
+        {
+            return [];
+        }
+        int Col(string name) => result.ColumnIndex(name);
+        var rows = result.Rows.Select(row => (
+            SearchService.Format(row[Col("@timestamp")]), SearchService.Format(row[Col("log.level")]),
+            SearchService.Format(row[Col("event.dataset")]), SearchService.Format(row[Col("message")]), SearchService.Format(row[Col("event.id")])));
+        return reverse ? rows.Reverse() : rows;
+    }
+
+    private void CloseDetail()
+    {
+        _detail = null;
+        _detailLoading = false;
+    }
+
+    private void LoadSaved(SavedSearch saved)
+    {
+        _customFrom = _customTo = null;
+        Navigate(saved.Query, saved.TimeRange, _tenant);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_access is null)
+        {
+            return;
+        }
+        await Saved.SaveAsync(_access, _saveName, _query, _range == "custom" ? "-24h" : _range, CancellationToken.None);
+        _saved = await Saved.ListAsync(_access, CancellationToken.None);
+        _notice = $"Saved \"{_saveName.Trim()}\".";
+        _showSave = false;
+        _saveName = string.Empty;
+    }
+
+    private async Task DeleteSavedAsync(SavedSearch saved)
+    {
+        if (_access is null)
+        {
+            return;
+        }
+        await Saved.DeleteAsync(_access, saved.Id, CancellationToken.None);
+        _saved = await Saved.ListAsync(_access, CancellationToken.None);
+    }
+
+    private static string RangeLabel(string value) => Ranges.FirstOrDefault(r => r.Value == value).Label ?? value;
+
+    private static string CellClass(string column, object? value) => column switch
+    {
+        "message" or "raw" => "dg-log",
+        _ when IsNumber(value) => "text-nowrap text-end",
+        _ => "text-nowrap",
+    };
+
+    private static bool IsNumber(object? value) => value is double or float or long or ulong or int or uint or short or ushort or byte or decimal;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_charts is not null)
+        {
+            try
+            {
+                await _charts.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // circuit already gone
+            }
+        }
+    }
+}
