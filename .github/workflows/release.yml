@@ -67,6 +67,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: agent-*      # not the build record docker/build-push-action uploads
           merge-multiple: true
       - name: Create GitHub release
         env:
