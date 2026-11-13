@@ -18,10 +18,15 @@ param(
     [string]$Server,
     [string]$Token,
     [string]$Name = $env:COMPUTERNAME.ToLowerInvariant(),
-    [string]$Binary = (Join-Path $PSScriptRoot 'dg-siem-agent.exe')
+    [string]$Binary
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Binary) {
+    # Not a param default: Windows PowerShell 5.1 leaves $PSScriptRoot empty there.
+    $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $Binary = Join-Path $here 'dg-siem-agent.exe'
+}
 $service = 'dg-siem-agent'
 $installDir = Join-Path $env:ProgramFiles 'DG SIEM Agent'
 $dataDir = Join-Path $env:ProgramData 'DG SIEM\Agent'
@@ -63,7 +68,7 @@ if (-not (Test-Path (Join-Path $dataDir 'state.txt'))) {
     }
 }
 
-# Event Viewer shows the agent's own warnings as "The description for Event ID … cannot be found" unless the
+# Event Viewer shows the agent's own warnings as "The description for Event ID ... cannot be found" unless the
 # source has a message file. .NET's generic one ("%1") ships with Windows.
 $sourceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\$service"
 $messages = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll'
