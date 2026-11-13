@@ -10,6 +10,7 @@ COPY LICENSE ./
 RUN dotnet publish src/DreaminGeek.Siem.Web/DreaminGeek.Siem.Web.csproj -c Release -p:Version="${VERSION#v}" -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+LABEL org.opencontainers.image.source="https://github.com/dreamingeek/dg-siem"
 WORKDIR /app
 COPY --from=build /app .
 # PKI (agent CA) and data-protection keys live here; mount a volume and back it up.
