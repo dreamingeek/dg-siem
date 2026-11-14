@@ -28,6 +28,17 @@ public sealed class WindowsEventParser : IEventParser
         return envelope.Input.StartsWith(InputPrefix, StringComparison.Ordinal) && envelope.Message.StartsWith("<Event", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The event XML without anything after its closing tag. Agents up to 0.5.1 could send leftover memory
+    /// after the event (the Windows API reported more characters than the string had); the event itself is intact.
+    /// </summary>
+    internal static string EventXml(string message)
+    {
+        const string Close = "</Event>";
+        var end = message.IndexOf(Close, StringComparison.Ordinal);
+        return end < 0 || end + Close.Length == message.Length ? message : message[..(end + Close.Length)];
+    }
+
     public bool TryParse(RawEnvelope envelope, string tenantId, out LogEvent? logEvent)
     {
         ArgumentNullException.ThrowIfNull(envelope);
@@ -35,7 +46,7 @@ public sealed class WindowsEventParser : IEventParser
         XElement root;
         try
         {
-            root = XElement.Parse(envelope.Message, LoadOptions.None);
+            root = XElement.Parse(EventXml(envelope.Message), LoadOptions.None);
         }
         catch (XmlException)
         {
