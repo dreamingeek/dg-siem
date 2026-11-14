@@ -177,4 +177,38 @@ public sealed class AgentPackageTests : IDisposable
         var ex = await Assert.ThrowsAsync<InvalidDataException>(() => AgentUpdater.VerifyAsync(new AgentUpdateInfo("1.0.0", "linux-x64", sha, script.Length), path, CancellationToken.None));
         Assert.Contains("reported '0.9.0'", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Packages_built_with_older_install_scripts_are_rebuilt_at_startup()
+    {
+        var store = Store();
+        var added = await store.AddAsync("agent.exe", new MemoryStream(FakeAgent("win-x64", "0.5.1")), "jane@example.com", CancellationToken.None);
+        Assert.NotNull(added.ScriptsSha256);
+
+        // Up to date: nothing to do, the package and its checksum stay as they are.
+        Assert.Equal(0, await store.RefreshScriptsAsync(CancellationToken.None));
+        Assert.Equal(added.PackageSha256, store.Find("win-x64", "0.5.1")!.PackageSha256);
+
+        // A package from an older server (no scripts fingerprint, old install.ps1 inside).
+        var dir = Path.GetDirectoryName(store.PackagePath(added))!;
+        File.WriteAllText(Path.Combine(dir, "package.json"),
+            File.ReadAllText(Path.Combine(dir, "package.json")).Replace("\"scriptsSha256\"", "\"oldScripts\"", StringComparison.Ordinal));
+        using (var zip = ZipFile.Open(store.PackagePath(added), ZipArchiveMode.Update))
+        {
+            zip.GetEntry("install.ps1")!.Delete();
+            using var writer = new StreamWriter(zip.CreateEntry("install.ps1").Open());
+            writer.Write("old script");
+        }
+
+        Assert.Equal(1, await store.RefreshScriptsAsync(CancellationToken.None));
+        var rebuilt = store.Find("win-x64", "0.5.1")!;
+        Assert.Equal(added.BinarySha256, rebuilt.BinarySha256);
+        Assert.Equal(AgentPackageStore.Sha256(File.ReadAllBytes(store.PackagePath(rebuilt))), rebuilt.PackageSha256);
+        using (var zip = ZipFile.OpenRead(store.PackagePath(rebuilt)))
+        using (var reader = new StreamReader(zip.GetEntry("install.ps1")!.Open()))
+        {
+            Assert.Equal(Encoding.UTF8.GetString(AgentPackageStore.Resource("install.ps1")), reader.ReadToEnd());
+        }
+        Assert.Equal(0, await store.RefreshScriptsAsync(CancellationToken.None));
+    }
 }

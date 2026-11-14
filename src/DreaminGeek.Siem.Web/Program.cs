@@ -209,6 +209,8 @@ if (clickHouseOptions.EnforceRowPolicies)
     await app.Services.GetRequiredService<TenantRowPolicies>().InitializeAsync(slugs, CancellationToken.None);
 }
 _ = app.Services.GetRequiredService<CertificateAuthority>().ServerCertificate; // create CA/cert at startup, not on first agent
+// A server update can bring fixed install scripts; rebuild stored agent packages around them.
+await app.Services.GetRequiredService<AgentPackageStore>().RefreshScriptsAsync(CancellationToken.None);
 
 // The agent port serves only the agent API; the UI port never serves it.
 app.Use(async (context, next) =>
