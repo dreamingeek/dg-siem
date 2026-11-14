@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<TenantRowPolicies>();
         services.AddSingleton<ClickHouseStorage>();
         services.AddSingleton<IEventSink, ClickHouseEventSink>();
+        services.AddSingleton<IMetricSink, ClickHouseMetricSink>();
         services.AddSingleton<DreaminGeek.Siem.Query.IQueryExecutor, ClickHouseQueryExecutor>();
         services.AddSingleton<DreaminGeek.Siem.Query.IQueryParser, DreaminGeek.Siem.Query.PipeParser>();
         services.AddSingleton<DreaminGeek.Siem.Query.IQueryCompiler>(sp =>

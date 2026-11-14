@@ -21,11 +21,14 @@ public sealed partial class IngestPipeline : BackgroundService
     private readonly DreaminGeek.Siem.Ingest.GeoIp.IGeoIpEnricher _geo;
     private readonly RetentionPolicy _retention;
     private readonly DreaminGeek.Siem.Ingest.ThreatIntel.IThreatIntelEnricher? _threats;
+    private readonly IMetricSink? _metricSink;
     private readonly IngestOptions _options;
     private readonly ILogger<IngestPipeline> _logger;
+    /// <summary>Samples from Prometheus scrapes, written next to (and retried like) the events batch.</summary>
+    private readonly List<MetricSample> _metrics = [];
 
     public IngestPipeline(ParserRegistry parsers, IEventSink sink, DropFilter drops, DreaminGeek.Siem.Ingest.GeoIp.IGeoIpEnricher geo, IOptions<IngestOptions> options, ILogger<IngestPipeline> logger, RetentionPolicy? retention = null,
-        DreaminGeek.Siem.Ingest.ThreatIntel.IThreatIntelEnricher? threats = null)
+        DreaminGeek.Siem.Ingest.ThreatIntel.IThreatIntelEnricher? threats = null, IMetricSink? metrics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _parsers = parsers;
@@ -33,6 +36,7 @@ public sealed partial class IngestPipeline : BackgroundService
         _retention = retention ?? new RetentionPolicy();
         _geo = geo;
         _threats = threats;
+        _metricSink = metrics;
         _drops = drops;
         _options = options.Value;
         _logger = logger;
@@ -99,7 +103,7 @@ public sealed partial class IngestPipeline : BackgroundService
                 // A batch that failed to write is retried as it is, before anything new is read.
                 if (attempt == 0)
                 {
-                    if (batch.Count == 0 && !await reader.WaitToReadAsync(stoppingToken))
+                    if (batch.Count == 0 && _metrics.Count == 0 && !await reader.WaitToReadAsync(stoppingToken))
                     {
                         break;
                     }
@@ -108,10 +112,18 @@ public sealed partial class IngestPipeline : BackgroundService
                     flushTimer.CancelAfter(_options.FlushInterval);
                     try
                     {
-                        while (batch.Count < _options.BatchSize && await reader.WaitToReadAsync(flushTimer.Token))
+                        while (batch.Count < _options.BatchSize && _metrics.Count < MaxMetricBatch && await reader.WaitToReadAsync(flushTimer.Token))
                         {
-                            while (batch.Count < _options.BatchSize && reader.TryRead(out var item))
+                            while (batch.Count < _options.BatchSize && _metrics.Count < MaxMetricBatch && reader.TryRead(out var item))
                             {
+                                if (Metrics.PrometheusText.IsScrape(item.Envelope))
+                                {
+                                    if (_metricSink is not null)
+                                    {
+                                        _metrics.AddRange(Metrics.PrometheusText.Parse(item.Envelope, item.TenantId));
+                                    }
+                                    continue;
+                                }
                                 var parsed = _parsers.Parse(item.Envelope, item.TenantId);
                                 if (_drops.Match(parsed) is null)
                                 {
@@ -169,13 +181,22 @@ public sealed partial class IngestPipeline : BackgroundService
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            LogShutdownLost(_logger, ex, batch.Count + _queue.Reader.Count);
+            LogShutdownLost(_logger, ex, batch.Count + _metrics.Count + _queue.Reader.Count);
         }
     }
+
+    /// <summary>Samples written at once; a big scrape can go over it, then the batch is written right away.</summary>
+    private const int MaxMetricBatch = 50_000;
 
     private async Task FlushAsync(List<LogEvent> batch, CancellationToken cancellationToken)
     {
         _drops.Flush();
+        // Metrics first, and cleared once written, so a failed event write is retried without writing them twice.
+        if (_metrics.Count > 0 && _metricSink is not null)
+        {
+            await _metricSink.WriteAsync(_metrics, cancellationToken);
+            _metrics.Clear();
+        }
         if (batch.Count == 0)
         {
             return;

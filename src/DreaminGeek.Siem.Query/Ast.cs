@@ -27,6 +27,16 @@ public sealed record FieldSummaryCommand(int Position, IReadOnlyList<string> Fie
 /// <summary><c>top field [by field] [limit=N]</c>: most common values with count and percent.</summary>
 public sealed record TopCommand(int Position, string Field, string? By, int Limit) : CommandNode(Position);
 
+/// <summary>
+/// <c>mstats avg(node_load1) [where label=value ...] [by label, ...] [span=5m]</c>: aggregates metric samples
+/// instead of events. Must start the search (<c>| mstats ...</c>).
+/// </summary>
+public sealed record MstatsCommand(int Position, IReadOnlyList<Aggregation> Aggregations, IReadOnlyList<LabelFilter> Filters,
+    IReadOnlyList<string> By, TimeSpan? Span) : CommandNode(Position);
+
+/// <summary><c>label=value</c> or <c>label!=value</c> in mstats; <c>*</c> in the value is a wildcard.</summary>
+public sealed record LabelFilter(int Position, string Label, bool Negated, string Value);
+
 /// <summary>An aggregation like <c>count()</c>, <c>dc(user.name)</c>, <c>p95(network.bytes)</c>.</summary>
 public sealed record Aggregation(string Function, string? Field, string? Alias)
 {

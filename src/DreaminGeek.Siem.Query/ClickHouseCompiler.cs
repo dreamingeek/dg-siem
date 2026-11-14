@@ -105,13 +105,26 @@ public sealed class ClickHouseCompiler(string database, CompilerOptions? options
 
         public CompiledQuery Run(PipelineNode pipeline)
         {
-            AddScope();
-            if (pipeline.Search.Filter is { } filter)
+            var commands = pipeline.Commands.AsEnumerable();
+            if (pipeline.Commands.Count > 0 && pipeline.Commands[0] is MstatsCommand mstats)
             {
-                _stage.Where.Add(Bool(Compile(filter, search: true)));
+                if (pipeline.Search.Filter is not null)
+                {
+                    throw new QueryParseException("mstats starts the search: begin with | mstats ..., not with search terms.", mstats.Position);
+                }
+                CompileMstats(mstats);
+                commands = commands.Skip(1);
+            }
+            else
+            {
+                AddScope();
+                if (pipeline.Search.Filter is { } filter)
+                {
+                    _stage.Where.Add(Bool(Compile(filter, search: true)));
+                }
             }
 
-            foreach (var command in pipeline.Commands)
+            foreach (var command in commands)
             {
                 Apply(command);
             }
@@ -142,6 +155,9 @@ public sealed class ClickHouseCompiler(string database, CompilerOptions? options
         {
             switch (command)
             {
+                case MstatsCommand later:
+                    throw new QueryParseException("mstats has to come first: | mstats avg(node_load1) by instance span=5m.", later.Position);
+
                 case WhereCommand where:
                     EnsureUnshaped();
                     _stage.Where.Add(Bool(Compile(where.Condition, search: false)));
@@ -365,6 +381,124 @@ public sealed class ClickHouseCompiler(string database, CompilerOptions? options
             _stage.LimitByCount = summary.MaxValues;
             _stage.Aggregated = true;
             _stage.Shape = ResultShape.Table;
+        }
+
+        // ------------------------------------------------------------ mstats
+
+        /// <summary>
+        /// Metrics are aggregated in three steps over <c>{db}.metrics</c>, scoped to the caller's tenants like events:
+        /// <list type="number">
+        /// <item>samples, with each counter sample's increase over the previous one in its series (a lower value
+        /// means the counter reset, and the increase is the new value);</item>
+        /// <item>per series and time bucket: average, min, max, last value, sample count and total increase;</item>
+        /// <item>per bucket and by-labels: across the series. So <c>sum</c> adds each series' average rather than
+        /// every sample, and <c>rate</c> is the summed increase per second.</item>
+        /// </list>
+        /// The result is a table (no span) or a timechart (span), and later commands work on it like on stats output.
+        /// </summary>
+        private void CompileMstats(MstatsCommand m)
+        {
+            var metricsTable = $"{database}.metrics";
+            var names = m.Aggregations.Select(a => a.Field!).Distinct(StringComparer.Ordinal).ToArray();
+            var needsIncrease = m.Aggregations.Any(a => a.Function is "rate" or "increase");
+            var lookback = needsIncrease ? TimeSpan.FromMinutes(10) : TimeSpan.Zero; // the sample before the range, for the first increase
+
+            var where = new List<string>
+            {
+                $"tenant_id IN {Param(request.TenantIds.ToArray(), "Array(String)")}",
+                $"name IN {Param(names, "Array(String)")}",
+                $"timestamp >= {Param((request.From - lookback).UtcDateTime, "DateTime64(3, 'UTC')")}",
+                $"timestamp < {Param(request.To.UtcDateTime, "DateTime64(3, 'UTC')")}",
+            };
+            foreach (var f in m.Filters)
+            {
+                var label = $"labels[{Param(f.Label, "String")}]";
+                var match = f.Value.Contains('*', StringComparison.Ordinal)
+                    ? $"{label} LIKE {Param(LikePattern(f.Value), "String")}"
+                    : $"{label} = {Param(f.Value, "String")}";
+                where.Add(f.Negated ? $"NOT ({match})" : match);
+            }
+
+            // 1. Samples, with the increase since the previous sample of the same series.
+            var samples = needsIncrease
+                ? $"SELECT tenant_id, timestamp, name, series, labels, value, " +
+                  "if(_n = 1, NULL, if(value >= _prev, value - _prev, value)) AS increase FROM (" +
+                  "SELECT tenant_id, timestamp, name, series, labels, value, " +
+                  "lagInFrame(value) OVER _w AS _prev, row_number() OVER _w AS _n " +
+                  $"FROM {metricsTable} WHERE {string.Join(" AND ", where)} " +
+                  "WINDOW _w AS (PARTITION BY tenant_id, name, series ORDER BY timestamp ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))"
+                : $"SELECT tenant_id, timestamp, name, series, labels, value, 0 AS increase FROM {metricsTable} WHERE {string.Join(" AND ", where)}";
+
+            // 2. Per series and bucket.
+            var span = m.Span;
+            var bucket = span is { } sp ? $"toStartOfInterval(timestamp, {Interval(sp)})" : null;
+            var perSeries = new StringBuilder("SELECT ");
+            if (bucket is not null)
+            {
+                perSeries.Append(CultureInfo.InvariantCulture, $"{bucket} AS _time, ");
+            }
+            perSeries.Append("tenant_id, name, series, any(labels) AS labels, avg(value) AS s_avg, min(value) AS s_min, max(value) AS s_max, ")
+                .Append("argMax(value, timestamp) AS s_last, max(timestamp) AS s_at, count() AS s_n, sum(increase) AS s_inc ")
+                .Append(CultureInfo.InvariantCulture, $"FROM ({samples}) WHERE timestamp >= {Param(request.From.UtcDateTime, "DateTime64(3, 'UTC')")} ")
+                .Append("GROUP BY ").Append(bucket is null ? "" : "_time, ").Append("tenant_id, name, series");
+
+            // 3. Across series, per bucket and by-labels.
+            var select = new List<(string Alias, SqlExpr Expr)>();
+            var groupBy = new List<string>();
+            if (bucket is not null)
+            {
+                select.Add(("_time", new SqlExpr("_time", SqlType.DateTime)));
+                groupBy.Add("_time");
+            }
+            var labelExprs = m.By.Select(label => (Label: label, Sql: $"labels[{Param(label, "String")}]")).ToList();
+            if (bucket is not null && labelExprs.Count > 1)
+            {
+                // A timechart has one series column: "a / b".
+                var name = ValidName(string.Join("/", m.By), m.Position);
+                var combined = $"arrayStringConcat([{string.Join(", ", labelExprs.Select(l => l.Sql))}], ' / ')";
+                select.Add((name, new SqlExpr(combined, SqlType.String)));
+                groupBy.Add(Quote(name));
+            }
+            else
+            {
+                foreach (var (label, sql) in labelExprs)
+                {
+                    var name = ValidName(label, m.Position);
+                    select.Add((name, new SqlExpr(sql, SqlType.String)));
+                    groupBy.Add(Quote(name));
+                }
+            }
+            var seconds = (span ?? (request.To - request.From)).TotalSeconds;
+            foreach (var agg in m.Aggregations)
+            {
+                var isMetric = $"name = {Param(agg.Field!, "String")}";
+                var value = agg.Function switch
+                {
+                    "avg" or "mean" => $"avgIf(s_avg, {isMetric})",
+                    "min" => $"minIf(s_min, {isMetric})",
+                    "max" => $"maxIf(s_max, {isMetric})",
+                    "sum" => $"sumIf(s_avg, {isMetric})",
+                    "count" => $"sumIf(s_n, {isMetric})",
+                    "latest" or "last" => $"argMaxIf(s_last, s_at, {isMetric})",
+                    "rate" => $"sumIf(s_inc, {isMetric}) / {seconds.ToString("0.###", CultureInfo.InvariantCulture)}",
+                    "increase" => $"sumIf(s_inc, {isMetric})",
+                    _ => throw new QueryParseException(
+                        $"mstats can't do {agg.Function}(). Use avg, min, max, sum, count, latest, rate or increase.", m.Position),
+                };
+                // No samples of this metric in the group: empty, not 0 or NaN.
+                select.Add((ValidName(agg.Alias ?? OutputName(agg), m.Position), new SqlExpr($"if(countIf({isMetric}) = 0, NULL, {value})", SqlType.Number)));
+            }
+            var outerSql = $"SELECT {string.Join(", ", select.Select(s => $"{s.Expr.Sql} AS {Quote(s.Alias)}"))} FROM ({perSeries})" +
+                (groupBy.Count > 0 ? $" GROUP BY {string.Join(", ", groupBy)}" : "");
+
+            var stage = new Stage { Source = $"({outerSql})", Shape = bucket is null ? ResultShape.Table : ResultShape.Timechart };
+            foreach (var (alias, expr) in select)
+            {
+                stage.Fields[alias] = new SqlExpr(Quote(alias), expr.Type);
+                stage.FieldOrder.Add(alias);
+            }
+            stage.OrderBy.AddRange(select.Where(s => s.Expr.Type != SqlType.Number).Select(s => $"{Quote(s.Alias)} ASC"));
+            _stage = stage;
         }
 
         private void CompileTimechart(TimechartCommand chart)

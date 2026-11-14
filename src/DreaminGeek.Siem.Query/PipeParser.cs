@@ -13,8 +13,18 @@ public sealed class PipeParser : IQueryParser
     {
         ArgumentNullException.ThrowIfNull(query);
         var segments = Lexer.SplitPipes(query);
-        var search = ParseSearch(segments[0].Text, segments[0].Offset);
         var commands = new List<CommandNode>();
+        SearchNode search;
+        if (segments[0].Text.TrimStart().StartsWith("mstats ", StringComparison.OrdinalIgnoreCase))
+        {
+            // "mstats ..." without the leading pipe: it's a command, not search terms.
+            search = new SearchNode(null);
+            commands.Add(ParseCommand(segments[0].Text, segments[0].Offset));
+        }
+        else
+        {
+            search = ParseSearch(segments[0].Text, segments[0].Offset);
+        }
         foreach (var (text, offset) in segments.Skip(1))
         {
             commands.Add(ParseCommand(text, offset));
@@ -141,8 +151,9 @@ public sealed class PipeParser : IQueryParser
             "fields" => ParseFields(tokens, name.Position),
             "top" => ParseTop(tokens, name.Position),
             "fieldsummary" => ParseFieldSummary(tokens, name.Position),
+            "mstats" => ParseMstats(tokens, name.Position),
             _ => throw new QueryParseException(
-                $"Unknown command '{name.Text}'. Available: where, eval, rex, stats, timechart, top, fieldsummary, sort, head, dedup, table, fields.", name.Position),
+                $"Unknown command '{name.Text}'. Available: where, eval, rex, stats, timechart, top, fieldsummary, sort, head, dedup, table, fields, mstats.", name.Position),
         };
         tokens.ExpectEnd(name.Text);
         return command;
@@ -188,6 +199,85 @@ public sealed class PipeParser : IQueryParser
             by.AddRange(FieldList(t));
         }
         return new StatsCommand(position, aggs, by);
+    }
+
+    private static MstatsCommand ParseMstats(Cursor t, int position)
+    {
+        static bool Clause(Token token) => token.IsKeyword("where") || token.IsKeyword("by") || token.IsKeyword("span");
+
+        var aggs = new List<Aggregation>();
+        while (!t.AtEnd && !Clause(t.Peek))
+        {
+            var fn = t.Next();
+            if (fn.Kind != TokenKind.Word || !t.Peek.Is("("))
+            {
+                throw new QueryParseException("Expected an aggregation of a metric, like avg(node_load1) or rate(http_requests_total).", fn.Position);
+            }
+            t.Expect("(");
+            var metric = FieldName(t);
+            t.Expect(")");
+            string? alias = null;
+            if (t.Peek.IsKeyword("as"))
+            {
+                t.Next();
+                alias = FieldName(t);
+            }
+            aggs.Add(new Aggregation(fn.Text.ToLowerInvariant(), metric, alias));
+            t.TryTake(",");
+        }
+        if (aggs.Count == 0)
+        {
+            throw new QueryParseException("mstats needs an aggregation of a metric, e.g. mstats avg(node_load1) by instance span=5m.", t.Peek.Position);
+        }
+
+        var filters = new List<LabelFilter>();
+        var by = new List<string>();
+        TimeSpan? span = null;
+        while (!t.AtEnd)
+        {
+            var clause = t.Next();
+            if (clause.IsKeyword("where"))
+            {
+                do
+                {
+                    t.TryTake("AND");
+                    var label = t.Next();
+                    if (label.Kind is not (TokenKind.Word or TokenKind.Quoted))
+                    {
+                        throw new QueryParseException("Expected a label filter like instance=\"web1:9100\".", label.Position);
+                    }
+                    var op = t.Next();
+                    if (!op.Is("=") && !op.Is("!="))
+                    {
+                        throw new QueryParseException("Label filters use = or !=, e.g. job=\"netprox\".", op.Position);
+                    }
+                    var value = t.Next();
+                    if (value.Kind is not (TokenKind.Word or TokenKind.Quoted or TokenKind.Number))
+                    {
+                        throw new QueryParseException("Expected a value after the label, e.g. job=\"netprox\" (quote values with : or *).", value.Position);
+                    }
+                    filters.Add(new LabelFilter(label.Position, label.Text, op.Is("!="), value.Text));
+                }
+                while (!t.AtEnd && !t.Peek.IsKeyword("by") && !t.Peek.IsKeyword("span"));
+            }
+            else if (clause.IsKeyword("by"))
+            {
+                do
+                {
+                    by.Add(FieldName(t));
+                }
+                while (t.TryTake(",") || (!t.AtEnd && t.Peek.Kind is TokenKind.Word or TokenKind.Quoted && !Clause(t.Peek)));
+            }
+            else if (clause.IsKeyword("span") && t.TryTake("="))
+            {
+                span = ParseSpan(t.Next());
+            }
+            else
+            {
+                throw new QueryParseException($"Expected where, by or span=, got '{clause.Text}'.", clause.Position);
+            }
+        }
+        return new MstatsCommand(position, aggs, filters, by, span);
     }
 
     private static TimechartCommand ParseTimechart(Cursor t, int position)

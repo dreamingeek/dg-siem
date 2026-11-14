@@ -93,6 +93,8 @@ public enum InputType
     Hec,
     /// <summary>Windows event logs (<see cref="InputConfig.Channels"/>); Windows agents only.</summary>
     WindowsEventLog,
+    /// <summary>Scrape Prometheus <c>/metrics</c> pages (<see cref="InputConfig.Targets"/>), like a Prometheus scrape job.</summary>
+    Prometheus,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<MultilineMode>))]
@@ -134,6 +136,38 @@ public sealed class InputConfig
 
     /// <summary>HEC: HTTPS with the agent's certificate (issued by the DG SIEM CA) instead of plain HTTP.</summary>
     public bool Tls { get; set; }
+
+    /// <summary>Prometheus: the job name, the <c>job</c> label on every sample.</summary>
+    public string? Job { get; set; }
+    /// <summary>Prometheus: <c>host:port</c> to scrape; each becomes the <c>instance</c> label.</summary>
+    public List<string>? Targets { get; set; }
+    /// <summary>Prometheus: path of the metrics page (default <c>/metrics</c>).</summary>
+    public string? MetricsPath { get; set; }
+    /// <summary>Prometheus: <c>http</c> (default) or <c>https</c>.</summary>
+    public string? Scheme { get; set; }
+    /// <summary>Prometheus: how often to scrape, e.g. <c>15s</c>, <c>1m</c> (default <c>1m</c>).</summary>
+    public string? ScrapeInterval { get; set; }
+    /// <summary>Prometheus: give up on a scrape after this long (default <c>10s</c>, at most the interval).</summary>
+    public string? ScrapeTimeout { get; set; }
+    /// <summary>Prometheus: <c>Authorization</c> header, as in Prometheus' <c>authorization: { credentials: ... }</c>.</summary>
+    public ScrapeAuthorization? Authorization { get; set; }
+    /// <summary>Prometheus: HTTP basic authentication.</summary>
+    public ScrapeBasicAuth? BasicAuth { get; set; }
+    /// <summary>Prometheus, https: accept any certificate (self-signed exporters on your own network).</summary>
+    public bool InsecureSkipVerify { get; set; }
+}
+
+public sealed class ScrapeAuthorization
+{
+    /// <summary>The scheme (default <c>Bearer</c>).</summary>
+    public string? Type { get; set; }
+    public string? Credentials { get; set; }
+}
+
+public sealed class ScrapeBasicAuth
+{
+    public string? Username { get; set; }
+    public string? Password { get; set; }
 }
 
 /// <summary>Where the file input got to in one file, so a restart resumes instead of re-reading or skipping.</summary>

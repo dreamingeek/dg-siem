@@ -210,6 +210,12 @@
                             </p>
                             <pre class="dg-example">{ "type": "Hec", "port": 8088, "tokens": ["@_hecToken"] }</pre>
                             <p class="mb-1">Send to it with <code>curl -H "Authorization: DGSIEM @_hecToken" http://AGENT:8088/services/collector/event -d '{"event": "hello", "sourcetype": "myapp"}'</code></p>
+                            <p class="mb-1">
+                                Prometheus metrics: scrape <code>/metrics</code> pages like a Prometheus scrape job (<code>job</code>, <code>targets</code>,
+                                optional <code>authorization</code>, <code>scrapeInterval</code>, <code>metricsPath</code>, <code>scheme</code>). Chart them with
+                                <code>| mstats avg(metric) by instance span=5m</code>.
+                            </p>
+                            <pre class="dg-example">{ "type": "Prometheus", "job": "netprox", "targets": ["netprox.example.net:81"], "authorization": { "credentials": "TOKEN" }, "scrapeInterval": "1m" }</pre>
                             <p class="mb-1">Windows event logs (Windows agents get the default set when they enroll; list channels to change it, with an optional event-log XPath filter):</p>
                             <pre class="dg-example">{ "type": "WindowsEventLog", "channels": [ { "name": "Security" }, { "name": "Microsoft-Windows-TaskScheduler/Operational" }, { "name": "Microsoft-Windows-PowerShell/Operational", "query": "*[System[(EventID=4104)]]" } ] }</pre>
                             <p class="mb-1">Syslog on another port, only from this machine:</p>
