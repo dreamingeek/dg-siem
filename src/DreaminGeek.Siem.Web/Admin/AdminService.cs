@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using DreaminGeek.Siem.Core;
 using DreaminGeek.Siem.Core.Agents;
 using DreaminGeek.Siem.Data;
 using DreaminGeek.Siem.Data.Entities;
@@ -112,6 +113,7 @@ public sealed class AdminService(
         var config = ParseAndValidateConfig(json);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var agent = await db.Agents.SingleOrDefaultAsync(a => a.Id == agentId, ct) ?? throw new AdminException("That agent no longer exists.");
+        RequireAgentSupports(config, agent.Version);
         agent.ConfigJson = JsonSerializer.Serialize(config, AgentJsonContext.Default.AgentConfig);
         await db.SaveChangesAsync(ct);
     }
@@ -200,6 +202,83 @@ public sealed class AdminService(
         }
     }
 
+    private static void ValidatePrometheusInput(InputConfig input)
+    {
+        if (string.IsNullOrWhiteSpace(input.Job) || input.Job.Length > 100 || input.Job.Any(char.IsControl))
+        {
+            throw new AdminException("A Prometheus input needs a \"job\" name, e.g. \"job\": \"netprox\".");
+        }
+        if (input.Targets is not { Count: > 0 })
+        {
+            throw new AdminException($"Prometheus job '{input.Job}' needs \"targets\", e.g. [\"netprox.example.net:81\"].");
+        }
+        foreach (var target in input.Targets)
+        {
+            if (!Uri.TryCreate($"http://{target}", UriKind.Absolute, out var uri) || uri.PathAndQuery != "/" || string.IsNullOrEmpty(uri.Host))
+            {
+                throw new AdminException($"Prometheus target '{target}' should be host:port, e.g. netprox.example.net:81.");
+            }
+        }
+        if (input.Scheme is not (null or "http" or "https"))
+        {
+            throw new AdminException($"Prometheus job '{input.Job}': scheme must be http or https.");
+        }
+        if (input.MetricsPath is { } path && (!path.StartsWith('/') || path.Any(char.IsWhiteSpace)))
+        {
+            throw new AdminException($"Prometheus job '{input.Job}': metricsPath must start with /, e.g. /metrics.");
+        }
+        var interval = ScrapeDuration(input.ScrapeInterval, TimeSpan.FromMinutes(1), "scrapeInterval", input.Job);
+        if (interval < TimeSpan.FromSeconds(5) || interval > TimeSpan.FromHours(1))
+        {
+            throw new AdminException($"Prometheus job '{input.Job}': scrapeInterval must be between 5s and 1h.");
+        }
+        var timeout = ScrapeDuration(input.ScrapeTimeout, TimeSpan.FromSeconds(10), "scrapeTimeout", input.Job);
+        if (timeout < TimeSpan.FromSeconds(1) || timeout > interval)
+        {
+            throw new AdminException($"Prometheus job '{input.Job}': scrapeTimeout must be at least 1s and no longer than the interval.");
+        }
+        if (input.Authorization is { } auth && (string.IsNullOrWhiteSpace(auth.Credentials) || auth.Credentials.Any(char.IsControl)))
+        {
+            throw new AdminException($"Prometheus job '{input.Job}': authorization needs \"credentials\" (the token).");
+        }
+        if (input.Authorization is not null && input.BasicAuth is not null)
+        {
+            throw new AdminException($"Prometheus job '{input.Job}': use authorization or basicAuth, not both.");
+        }
+    }
+
+    private static TimeSpan ScrapeDuration(string? text, TimeSpan fallback, string name, string job)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return fallback;
+        }
+        return MetricScrape.TryParseDuration(text, out var duration)
+            ? duration
+            : throw new AdminException($"Prometheus job '{job}': {name} '{text}' isn't a duration like 15s or 1m.");
+    }
+
+    /// <summary>The first agent version with each newer input type. Older agents can't read a config that has one.</summary>
+    private static readonly Dictionary<InputType, Version> InputSince = new() { [InputType.Prometheus] = new Version(0, 6, 0) };
+
+    /// <summary>Refuses inputs the agent is too old to understand (it would reject the whole config).</summary>
+    public static void RequireAgentSupports(AgentConfig config, string? agentVersion)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (!Version.TryParse(agentVersion, out var version))
+        {
+            return; // not reported yet
+        }
+        foreach (var input in config.Inputs)
+        {
+            if (InputSince.TryGetValue(input.Type, out var since) && version < since)
+            {
+                throw new AdminException($"This agent runs {agentVersion}; {input.Type} inputs need agent {since.ToString(3)} or later. " +
+                    "Upload that version under Agent updates and let the agent update first.");
+            }
+        }
+    }
+
     public static AgentConfig ParseAndValidateConfig(string json)
     {
         AgentConfig? config;
@@ -227,6 +306,11 @@ public sealed class AdminService(
                 ValidateEventLogInput(input);
                 continue;
             }
+            if (input.Type == InputType.Prometheus)
+            {
+                ValidatePrometheusInput(input);
+                continue;
+            }
             if (input.Port is < 1 or > 65535)
             {
                 throw new AdminException($"Input {input.Type} has an invalid port ({input.Port}).");
@@ -240,7 +324,7 @@ public sealed class AdminService(
                 ValidateHecInput(input);
             }
         }
-        var duplicate = config.Inputs.Where(i => i.Type is not (InputType.File or InputType.WindowsEventLog))
+        var duplicate = config.Inputs.Where(i => i.Type is not (InputType.File or InputType.WindowsEventLog or InputType.Prometheus))
             .GroupBy(i => (i.Type == InputType.SyslogUdp ? "udp" : "tcp", i.Port)).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
         {

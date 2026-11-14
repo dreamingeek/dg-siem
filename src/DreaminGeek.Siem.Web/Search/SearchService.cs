@@ -143,14 +143,18 @@ public sealed partial class SearchService(
         null => string.Empty,
         DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture),
         DateTimeOffset dto => dto.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture),
-        double d => d.ToString("0.##", CultureInfo.InvariantCulture),
-        float f => f.ToString("0.##", CultureInfo.InvariantCulture),
+        double d => Number(d),
+        float f => Number(f),
         string s => s,
         System.Collections.IDictionary map => string.Join(", ", map.Keys.Cast<object>().Select(k => $"{k}={map[k]}")),
         System.Collections.IEnumerable list => string.Join(", ", list.Cast<object?>().Select(Format)),
         IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? string.Empty,
     };
+
+    /// <summary>Two decimals, but small values (metrics in seconds, rates) keep three significant digits instead of showing 0.</summary>
+    private static string Number(double d) =>
+        d != 0 && Math.Abs(d) < 0.01 ? d.ToString("G3", CultureInfo.InvariantCulture) : d.ToString("0.##", CultureInfo.InvariantCulture);
 
     /// <summary>"-15m", "-24h", "-7d" relative to now, "now", or an ISO-8601 timestamp.</summary>
     public static DateTimeOffset ParseTime(string? value, DateTimeOffset now, DateTimeOffset fallback)

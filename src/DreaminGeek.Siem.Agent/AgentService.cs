@@ -121,6 +121,11 @@ public sealed partial class AgentService(IOptions<AgentOptions> options, ILogger
                 InputType.SyslogTls => () => new SyslogTcpInput(input, hints, buffer, certificate, logger).RunAsync(ct),
                 InputType.File => () => new FileTailInput(input, buffer, positions, logger).RunAsync(ct),
                 InputType.Hec => () => new HecInput(input, buffer, certificate, logger).RunAsync(ct),
+                InputType.Prometheus => async () =>
+                {
+                    using var scraper = new PrometheusInput(input, buffer, logger);
+                    await scraper.RunAsync(ct);
+                },
                 InputType.WindowsEventLog => () =>
                 {
                     if (OperatingSystem.IsWindows())

@@ -130,6 +130,8 @@ dataset=asterisk.sip | stats latest(ua) by user, src
 
 **Functions** (in `where`/`eval`): `lower`, `upper`, `len`, `tostring`, `tonumber`, `round`, `abs`, `substr`, `replace` (regex), `if`, `coalesce`, `isnull`, `isnotnull`, `like`, `match` (regex), `cidrmatch`, `now`, `ago("2h")`. Operators: `+ - * / %`, `.` joins strings.
 
+**Metrics:** `| mstats avg(node_load1) by instance span=5m` charts Prometheus metrics instead of events; see [metrics.md](metrics.md).
+
 ## Examples
 
 ```

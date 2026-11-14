@@ -53,6 +53,9 @@ public sealed partial class TenantRowPolicies : IDisposable
     /// <summary>Why <see cref="Ready"/> is false, for the search error message.</summary>
     public string? Problem { get; private set; } = "Row-policy setup hasn't run yet.";
 
+    /// <summary>The tables searches read; each gets the same policies.</summary>
+    private static readonly string[] Tables = ["events", "metrics"];
+
     public static string RoleName(string tenantSlug) => "dgsiem_t_" + tenantSlug.Replace('-', '_');
 
     public static bool IsValidSlug(string slug) => SlugPattern.IsMatch(slug);
@@ -67,18 +70,21 @@ public sealed partial class TenantRowPolicies : IDisposable
             var password = Literal(_password);
             await ExecAsync($"CREATE USER IF NOT EXISTS {reader} IDENTIFIED WITH sha256_password BY {password} SETTINGS readonly = 2", ct);
             await ExecAsync($"ALTER USER {reader} IDENTIFIED WITH sha256_password BY {password} SETTINGS readonly = 2", ct);
-            await ExecAsync($"GRANT SELECT ON {db}.events TO {reader}", ct);
-            // Base policy: by itself the reader sees nothing. Tenant roles add rows (policies are OR'ed).
-            await ExecAsync($"CREATE ROW POLICY OR REPLACE dgsiem_reader_none ON {db}.events FOR SELECT USING 0 TO {reader}", ct);
-            // Keep the main user unrestricted (older ClickHouse hides rows from users with no policy
-            // once any policy exists). Best effort: some setups can't attach policies to XML-defined users.
-            try
+            foreach (var table in Tables)
             {
-                await ExecAsync($"CREATE ROW POLICY OR REPLACE dgsiem_writer_all ON {db}.events FOR SELECT USING 1 TO {Ident(_adminUser)}", ct);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                LogWriterPolicySkipped(_logger, ex.Message.Split('\n')[0]);
+                await ExecAsync($"GRANT SELECT ON {db}.{table} TO {reader}", ct);
+                // Base policy: by itself the reader sees nothing. Tenant roles add rows (policies are OR'ed).
+                await ExecAsync($"CREATE ROW POLICY OR REPLACE dgsiem_reader_none ON {db}.{table} FOR SELECT USING 0 TO {reader}", ct);
+                // Keep the main user unrestricted (older ClickHouse hides rows from users with no policy
+                // once any policy exists). Best effort: some setups can't attach policies to XML-defined users.
+                try
+                {
+                    await ExecAsync($"CREATE ROW POLICY OR REPLACE dgsiem_writer_all ON {db}.{table} FOR SELECT USING 1 TO {Ident(_adminUser)}", ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    LogWriterPolicySkipped(_logger, ex.Message.Split('\n')[0]);
+                }
             }
 
             await SyncTenantsAsync(tenantSlugs, ct);
@@ -108,7 +114,10 @@ public sealed partial class TenantRowPolicies : IDisposable
                 }
                 var role = Ident(RoleName(slug));
                 await ExecAsync($"CREATE ROLE IF NOT EXISTS {role}", ct);
-                await ExecAsync($"CREATE ROW POLICY OR REPLACE {Ident("dgsiem_tenant_" + slug.Replace('-', '_'))} ON {db}.events FOR SELECT USING tenant_id = {Literal(slug)} TO {role}", ct);
+                foreach (var table in Tables)
+                {
+                    await ExecAsync($"CREATE ROW POLICY OR REPLACE {Ident("dgsiem_tenant_" + slug.Replace('-', '_'))} ON {db}.{table} FOR SELECT USING tenant_id = {Literal(slug)} TO {role}", ct);
+                }
                 await ExecAsync($"GRANT {role} TO {reader}", ct);
                 _synced.Add(slug);
             }
@@ -124,13 +133,21 @@ public sealed partial class TenantRowPolicies : IDisposable
     /// <summary>The reader with no roles must see zero rows. Proves the policies are actually enforced.</summary>
     private async Task SelfTestAsync(CancellationToken ct)
     {
-        var table = $"{Ident(_options.Database)}.events";
-        var total = Convert.ToInt64(await _admin.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: ct), System.Globalization.CultureInfo.InvariantCulture);
-        var visible = Convert.ToInt64(await Reader.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: ct), System.Globalization.CultureInfo.InvariantCulture);
-        if (visible != 0)
+        long total = 0;
+        foreach (var name in Tables)
         {
-            Fail($"Row-policy self-test failed: the reader saw {visible} of {total} rows with no tenant roles active.", null);
-            return;
+            var table = $"{Ident(_options.Database)}.{name}";
+            var rows = Convert.ToInt64(await _admin.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: ct), System.Globalization.CultureInfo.InvariantCulture);
+            var visible = Convert.ToInt64(await Reader.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: ct), System.Globalization.CultureInfo.InvariantCulture);
+            if (visible != 0)
+            {
+                Fail($"Row-policy self-test failed: the reader saw {visible} of {rows} rows in {name} with no tenant roles active.", null);
+                return;
+            }
+            if (name == "events")
+            {
+                total = rows;
+            }
         }
         Ready = true;
         Problem = null;

@@ -30,7 +30,7 @@ public static class PanelData
     public const int PieSlices = 8;
 
     /// <summary>Timechart rows (<c>_time</c>, optional split value, values) → chart series.</summary>
-    public static object Timechart(QueryResult r, string kind = "bars")
+    public static object Timechart(QueryResult r, string kind = "bars", bool? stacked = null)
     {
         ArgumentNullException.ThrowIfNull(r);
         var hasBy = r.Columns.Count >= 3 && r.Rows.Any(row => row[1] is string);
@@ -57,7 +57,7 @@ public static class PanelData
         return new
         {
             kind,
-            stacked = hasBy && valueColumns.Count == 1,
+            stacked = stacked ?? (hasBy && valueColumns.Count == 1),
             series = series.Select(s => new { name = s.Key, points = s.Value }).ToList(),
         };
     }

@@ -114,6 +114,7 @@ public static class AdminCli
                     var agent = await FindAgentAsync(db, path);
                     var json = file == "-" ? await Console.In.ReadToEndAsync() : await File.ReadAllTextAsync(file);
                     var config = DreaminGeek.Siem.Web.Admin.AdminService.ParseAndValidateConfig(json);
+                    DreaminGeek.Siem.Web.Admin.AdminService.RequireAgentSupports(config, agent.Version);
                     agent.ConfigJson = JsonSerializer.Serialize(config, AgentJsonContext.Default.AgentConfig);
                     await db.SaveChangesAsync();
                     Console.WriteLine($"Config saved. {path} picks it up within {config.ConfigPollSeconds}s.");

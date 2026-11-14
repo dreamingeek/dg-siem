@@ -198,7 +198,7 @@ public sealed class DashboardService(IDbContextFactory<SiemDbContext> dbFactory,
             case PanelKind.TimeLine or PanelKind.TimeArea or PanelKind.TimeBars:
                 if (r.Shape != ResultShape.Timechart)
                 {
-                    return new PanelResult { Error = "Time charts need a search ending in | timechart, e.g. | timechart count() by dataset." };
+                    return new PanelResult { Error = "Time charts need a search ending in | timechart (e.g. | timechart count() by dataset) or an mstats with span= (e.g. | mstats avg(up) by instance span=5m)." };
                 }
                 var kind = panel.Kind switch { PanelKind.TimeLine => "line", PanelKind.TimeArea => "area", _ => "bars" };
                 return Done(new PanelResult { Chart = PanelData.Timechart(r, kind), Empty = r.Rows.Count == 0 });

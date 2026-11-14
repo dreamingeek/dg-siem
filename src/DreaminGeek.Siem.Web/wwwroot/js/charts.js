@@ -1,5 +1,5 @@
 // ECharts rendering for DG SIEM, themed from the page's CSS variables.
-// render(element, { series: [{ name, points: [[epochMs, value], ...] }], stacked: bool })
+// render(element, { series: [{ name, points: [[epochMs, value], ...] }], stacked: bool, kind: "bars" | "line" })
 const charts = new Map();
 
 function theme() {
@@ -15,7 +15,7 @@ function palette(t) {
 
 function options(data) {
   const t = theme();
-  const bars = data.stacked || data.series.length === 1;
+  const bars = data.kind !== "line" && (data.stacked || data.series.length === 1);
   return {
     animation: false,
     color: palette(t),
