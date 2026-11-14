@@ -305,6 +305,17 @@ internal static partial class WevtApi
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool EvtFormatMessage(nint publisherMetadata, nint evt, int messageId, int valueCount, nint values, int flags, int bufferSize, nint buffer, out int bufferUsed);
 
+    /// <summary>
+    /// The text up to the first NUL. The reported "used" size can run past the string's terminator (seen
+    /// with EvtFormatMessageXml), and what follows is leftover memory, so it must never be included.
+    /// </summary>
+    public static string ToTerminated(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var end = text.IndexOf('\0', StringComparison.Ordinal);
+        return end < 0 ? text : text[..end];
+    }
+
     /// <summary>EvtRender to a string (event XML or bookmark XML); null on failure.</summary>
     public static string? RenderString(nint handle, int flags)
     {
@@ -317,7 +328,7 @@ internal static partial class WevtApi
         try
         {
             return EvtRender(0, handle, flags, needed, buffer, out var used, out _)
-                ? Marshal.PtrToStringUni(buffer, Math.Max(0, used / 2 - 1))
+                ? ToTerminated(Marshal.PtrToStringUni(buffer, Math.Clamp(used / 2, 0, needed / 2)))
                 : null;
         }
         finally
@@ -338,7 +349,7 @@ internal static partial class WevtApi
         try
         {
             return EvtFormatMessage(metadata, evt, 0, 0, 0, FormatMessageXml, neededChars, buffer, out var used)
-                ? Marshal.PtrToStringUni(buffer, Math.Max(0, used - 1))
+                ? ToTerminated(Marshal.PtrToStringUni(buffer, Math.Clamp(used, 0, neededChars)))
                 : null;
         }
         finally

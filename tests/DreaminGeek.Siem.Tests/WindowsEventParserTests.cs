@@ -245,4 +245,30 @@ public sealed class WindowsEventParserTests
         Assert.Throws<AdminException>(() => AdminService.ParseAndValidateConfig("""{"inputs":[{"type":"WindowsEventLog","channels":[{"name":"Security"},{"name":"security"}]}]}"""));
         Assert.Throws<AdminException>(() => AdminService.ParseAndValidateConfig("""{"inputs":[{"type":"WindowsEventLog","channels":[{"name":"Security","query":"EventID=4624"}]}]}"""));
     }
+
+    [Fact]
+    public void Leftover_memory_after_the_event_is_ignored()
+    {
+        // Agents up to 0.5.1 could send stale buffer contents after </Event>: pieces of an earlier event and binary XML.
+        var xml = Event("Microsoft-Windows-Security-Auditing", 5145, "Security",
+            Data(("SubjectUserName", "WS01$"), ("SubjectDomainName", "CORP"), ("ShareName", "\\\\*\\SYSVOL"), ("IpAddress", "::1"), ("IpPort", "61808")),
+            "<RenderingInfo Culture='en-US'><Message>A network share object was checked to see whether client can be granted desired access.</Message>" +
+            "<Level>Information</Level><Task>Detailed File Share</Task><Keywords><Keyword>Audit Success</Keyword></Keywords></RenderingInfo>");
+        var garbage = xml + "hare</Task><Opcode>Info</Opcode></RenderingInfo></Event>Info></Event>\u00ea\u9880\u4786\u0201\uc070 System\u4102\uffff\0Provider&\u4b46";
+
+        var e = Parse("Security", garbage);
+
+        Assert.Equal("windows.security", e.EventDataset);
+        Assert.Equal("5145", e.Fields["event.code"]);
+        Assert.Equal("A network share object was checked to see whether client can be granted desired access.", e.Message);
+        Assert.Equal(Parse("Security", xml).Fields.OrderBy(f => f.Key), e.Fields.OrderBy(f => f.Key));
+    }
+
+    [Theory]
+    [InlineData("<Event>x</Event>", "<Event>x</Event>")]
+    [InlineData("<Event>x</Event>\0\0junk", "<Event>x</Event>")]
+    [InlineData("<BookmarkList/>\0<Event>", "<BookmarkList/>")]
+    [InlineData("", "")]
+    public void Agent_reads_windows_strings_only_up_to_their_terminator(string raw, string expected) =>
+        Assert.Equal(expected, DreaminGeek.Siem.Agent.Inputs.WevtApi.ToTerminated(raw));
 }
