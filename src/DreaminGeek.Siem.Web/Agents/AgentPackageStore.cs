@@ -24,7 +24,7 @@ public sealed record AgentBinaryInfo(string Platform, string Version);
 /// <summary>One uploaded agent version for one platform.</summary>
 public sealed record AgentPackage(
     string Platform, string Version, string BinarySha256, long BinarySize, string PackageFile, string PackageSha256,
-    DateTimeOffset UploadedAt, string? UploadedBy)
+    DateTimeOffset UploadedAt, string? UploadedBy, string? ScriptsSha256 = null)
 {
     public bool IsWindows => Platform.StartsWith("win-", StringComparison.Ordinal);
     public string BinaryName => IsWindows ? "dg-siem-agent.exe" : "dg-siem-agent";
@@ -156,11 +156,55 @@ public sealed partial class AgentPackageStore(IOptions<AgentPackageOptions> opti
         var packageBytes = isWindows ? BuildZip(binary, now) : BuildTarGz(binary, now);
         await File.WriteAllBytesAsync(Path.Combine(dir, packageName), packageBytes, ct);
 
-        var package = new AgentPackage(info.Platform, info.Version, Sha256(binary), binary.Length, packageName, Sha256(packageBytes), now, uploadedBy);
+        var package = new AgentPackage(info.Platform, info.Version, Sha256(binary), binary.Length, packageName, Sha256(packageBytes), now, uploadedBy,
+            ScriptsSha256(isWindows));
         await File.WriteAllTextAsync(Path.Combine(dir, "package.json"), JsonSerializer.Serialize(package, Json), ct);
         Prune(info.Platform);
         LogAdded(logger, info.Platform, info.Version, uploadedBy ?? "?");
         return package;
+    }
+
+    /// <summary>
+    /// Rebuilds stored packages whose install scripts are older than the ones in this server build, so a
+    /// server update with an installer fix reaches new installs without re-uploading the agents.
+    /// The binaries are kept; only the package around them (and so its checksum) changes.
+    /// </summary>
+    public async Task<int> RefreshScriptsAsync(CancellationToken ct)
+    {
+        var rebuilt = 0;
+        foreach (var package in List())
+        {
+            var scripts = ScriptsSha256(package.IsWindows);
+            var binaryPath = BinaryPath(package);
+            if (package.ScriptsSha256 == scripts || !File.Exists(binaryPath))
+            {
+                continue;
+            }
+            var binary = await File.ReadAllBytesAsync(binaryPath, ct);
+            var bytes = package.IsWindows ? BuildZip(binary, package.UploadedAt) : BuildTarGz(binary, package.UploadedAt);
+            var dir = VersionDir(package.Platform, package.Version);
+            await File.WriteAllBytesAsync(Path.Combine(dir, package.PackageFile), bytes, ct);
+            var updated = package with { PackageSha256 = Sha256(bytes), ScriptsSha256 = scripts };
+            await File.WriteAllTextAsync(Path.Combine(dir, "package.json"), JsonSerializer.Serialize(updated, Json), ct);
+            LogRebuilt(logger, package.Platform, package.Version);
+            rebuilt++;
+        }
+        return rebuilt;
+    }
+
+    /// <summary>Fingerprint of the scripts and units that go into a package next to the binary.</summary>
+    private static string ScriptsSha256(bool windows)
+    {
+        string[] names = windows
+            ? ["install.ps1", "LICENSE"]
+            : ["install.sh", "dg-siem-agent.service", "dg-siem-agent-update.service", "dg-siem-agent-update.path", "LICENSE"];
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var name in names)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(name + "\n"));
+            hash.AppendData(Resource(name));
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     /// <summary>Every stored version, newest first within each platform.</summary>
@@ -292,6 +336,9 @@ public sealed partial class AgentPackageStore(IOptions<AgentPackageOptions> opti
     }
 
     public static string Sha256(byte[] data) => Convert.ToHexStringLower(SHA256.HashData(data));
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {Platform} {Version}: package rebuilt with this server's install scripts")]
+    private static partial void LogRebuilt(ILogger logger, string platform, string version);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {Platform} {Version} uploaded by {User}")]
     private static partial void LogAdded(ILogger logger, string platform, string version, string user);
