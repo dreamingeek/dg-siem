@@ -105,6 +105,46 @@ public class PrometheusTextTests
     }
 }
 
+public class MetricTargetTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 11, 15, 12, 0, 0, TimeSpan.Zero);
+
+    private static DreaminGeek.Siem.Storage.ClickHouse.MetricTarget Target(TimeSpan ago, bool up, TimeSpan? every) =>
+        new("acme", "netprox", "netprox.example.net:81", Now - ago, up, null, 120, 0.04, every);
+
+    [Fact]
+    public void A_target_is_up_down_or_missing()
+    {
+        Assert.Equal(DreaminGeek.Siem.Storage.ClickHouse.TargetState.Up, Target(TimeSpan.FromSeconds(30), true, TimeSpan.FromMinutes(1)).StateAt(Now));
+        Assert.Equal(DreaminGeek.Siem.Storage.ClickHouse.TargetState.Down, Target(TimeSpan.FromSeconds(30), false, TimeSpan.FromMinutes(1)).StateAt(Now));
+        // Missing after three intervals, but never sooner than 5 minutes.
+        Assert.Equal(DreaminGeek.Siem.Storage.ClickHouse.TargetState.Up, Target(TimeSpan.FromMinutes(4), true, TimeSpan.FromSeconds(15)).StateAt(Now));
+        Assert.Equal(DreaminGeek.Siem.Storage.ClickHouse.TargetState.Missing, Target(TimeSpan.FromMinutes(6), true, TimeSpan.FromSeconds(15)).StateAt(Now));
+        Assert.Equal(DreaminGeek.Siem.Storage.ClickHouse.TargetState.Up, Target(TimeSpan.FromMinutes(25), true, TimeSpan.FromMinutes(10)).StateAt(Now));
+        Assert.Equal(DreaminGeek.Siem.Storage.ClickHouse.TargetState.Missing, Target(TimeSpan.FromMinutes(31), true, TimeSpan.FromMinutes(10)).StateAt(Now));
+    }
+
+    [Fact]
+    public void Scrape_errors_are_kept_until_the_next_good_scrape()
+    {
+        var errors = new ScrapeErrors();
+        errors.Record("acme", "netprox", "a:81", Now, "server returned HTTP status 401 Unauthorized");
+        Assert.Equal("server returned HTTP status 401 Unauthorized", errors.Get("acme", "netprox", "a:81"));
+        Assert.Null(errors.Get("globex", "netprox", "a:81"));
+        errors.Record("acme", "netprox", "a:81", Now, null);
+        Assert.Null(errors.Get("acme", "netprox", "a:81"));
+    }
+
+    [Fact]
+    public void The_scrape_error_comes_out_of_the_envelope()
+    {
+        PrometheusText.Parse(new RawEnvelope(Now, "prometheus:netprox", "a:81", "# dgsiem_scrape error=Connection refused"), "acme", out var error);
+        Assert.Equal("Connection refused", error);
+        PrometheusText.Parse(new RawEnvelope(Now, "prometheus:netprox", "a:81", "# dgsiem_scrape duration_seconds=0.1\nx 1"), "acme", out error);
+        Assert.Null(error);
+    }
+}
+
 public class MstatsTests
 {
     private static CompiledQuery Compile(string query, params string[] tenants) => ClickHouseCompilerTests.Compile(query, tenants);

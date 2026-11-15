@@ -22,13 +22,15 @@ public sealed partial class IngestPipeline : BackgroundService
     private readonly RetentionPolicy _retention;
     private readonly DreaminGeek.Siem.Ingest.ThreatIntel.IThreatIntelEnricher? _threats;
     private readonly IMetricSink? _metricSink;
+    private readonly Metrics.ScrapeErrors? _scrapeErrors;
     private readonly IngestOptions _options;
     private readonly ILogger<IngestPipeline> _logger;
     /// <summary>Samples from Prometheus scrapes, written next to (and retried like) the events batch.</summary>
     private readonly List<MetricSample> _metrics = [];
 
     public IngestPipeline(ParserRegistry parsers, IEventSink sink, DropFilter drops, DreaminGeek.Siem.Ingest.GeoIp.IGeoIpEnricher geo, IOptions<IngestOptions> options, ILogger<IngestPipeline> logger, RetentionPolicy? retention = null,
-        DreaminGeek.Siem.Ingest.ThreatIntel.IThreatIntelEnricher? threats = null, IMetricSink? metrics = null)
+        DreaminGeek.Siem.Ingest.ThreatIntel.IThreatIntelEnricher? threats = null, IMetricSink? metrics = null,
+        Metrics.ScrapeErrors? scrapeErrors = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _parsers = parsers;
@@ -37,6 +39,7 @@ public sealed partial class IngestPipeline : BackgroundService
         _geo = geo;
         _threats = threats;
         _metricSink = metrics;
+        _scrapeErrors = scrapeErrors;
         _drops = drops;
         _options = options.Value;
         _logger = logger;
@@ -120,7 +123,9 @@ public sealed partial class IngestPipeline : BackgroundService
                                 {
                                     if (_metricSink is not null)
                                     {
-                                        _metrics.AddRange(Metrics.PrometheusText.Parse(item.Envelope, item.TenantId));
+                                        _metrics.AddRange(Metrics.PrometheusText.Parse(item.Envelope, item.TenantId, out var scrapeError));
+                                        _scrapeErrors?.Record(item.TenantId, item.Envelope.Input[MetricScrape.InputPrefix.Length..],
+                                            item.Envelope.SourceAddress ?? string.Empty, item.Envelope.ReceivedAt, scrapeError);
                                     }
                                     continue;
                                 }

@@ -15,6 +15,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DropFilter>();
         services.TryAddSingleton<DreaminGeek.Siem.Ingest.GeoIp.IGeoIpEnricher, DreaminGeek.Siem.Ingest.GeoIp.NoGeoIp>();
         services.TryAddSingleton<DreaminGeek.Siem.Core.RetentionPolicy>();
+        services.AddSingleton<Metrics.ScrapeErrors>();
         services.AddSingleton<IngestPipeline>();
         services.AddHostedService(sp => sp.GetRequiredService<IngestPipeline>());
         return services;
