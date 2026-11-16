@@ -202,6 +202,25 @@ public sealed class AdminService(
         }
     }
 
+    private static void ValidateInfluxInput(InputConfig input)
+    {
+        if (input.Job is { } job && (job.Length is 0 or > 100 || job.Any(char.IsControl)))
+        {
+            throw new AdminException("An InfluxDB input's \"job\" should be a short name, e.g. \"proxmox\".");
+        }
+        if (input.Type == InputType.InfluxDbUdp && input.Tokens is { Count: > 0 })
+        {
+            throw new AdminException("InfluxDB over UDP can't check tokens; remove \"tokens\" or use the InfluxDb (HTTP) input.");
+        }
+        foreach (var token in input.Tokens ?? [])
+        {
+            if (token.Length < 8 || token.Length > 256 || token.Any(c => c is <= ' ' or >= (char)127))
+            {
+                throw new AdminException("InfluxDB tokens must be 8 to 256 characters with no spaces.");
+            }
+        }
+    }
+
     private static void ValidatePrometheusInput(InputConfig input)
     {
         if (string.IsNullOrWhiteSpace(input.Job) || input.Job.Length > 100 || input.Job.Any(char.IsControl))
@@ -259,7 +278,12 @@ public sealed class AdminService(
     }
 
     /// <summary>The first agent version with each newer input type. Older agents can't read a config that has one.</summary>
-    private static readonly Dictionary<InputType, Version> InputSince = new() { [InputType.Prometheus] = new Version(0, 6, 0) };
+    private static readonly Dictionary<InputType, Version> InputSince = new()
+    {
+        [InputType.Prometheus] = new Version(0, 6, 0),
+        [InputType.InfluxDb] = new Version(0, 7, 0),
+        [InputType.InfluxDbUdp] = new Version(0, 7, 0),
+    };
 
     /// <summary>Refuses inputs the agent is too old to understand (it would reject the whole config).</summary>
     public static void RequireAgentSupports(AgentConfig config, string? agentVersion)
@@ -319,13 +343,17 @@ public sealed class AdminService(
             {
                 throw new AdminException($"Input {input.Type} has an invalid bind address ({input.BindAddress}).");
             }
+            if (input.Type is InputType.InfluxDb or InputType.InfluxDbUdp)
+            {
+                ValidateInfluxInput(input);
+            }
             if (input.Type == InputType.Hec)
             {
                 ValidateHecInput(input);
             }
         }
         var duplicate = config.Inputs.Where(i => i.Type is not (InputType.File or InputType.WindowsEventLog or InputType.Prometheus))
-            .GroupBy(i => (i.Type == InputType.SyslogUdp ? "udp" : "tcp", i.Port)).FirstOrDefault(g => g.Count() > 1);
+            .GroupBy(i => (i.Type is InputType.SyslogUdp or InputType.InfluxDbUdp ? "udp" : "tcp", i.Port)).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
         {
             throw new AdminException($"Two inputs use {duplicate.Key.Item1} port {duplicate.Key.Port}.");

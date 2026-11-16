@@ -119,6 +119,14 @@ public sealed partial class IngestPipeline : BackgroundService
                         {
                             while (batch.Count < _options.BatchSize && _metrics.Count < MaxMetricBatch && reader.TryRead(out var item))
                             {
+                                if (Metrics.InfluxLineProtocol.IsPush(item.Envelope))
+                                {
+                                    if (_metricSink is not null)
+                                    {
+                                        _metrics.AddRange(Metrics.InfluxLineProtocol.Parse(item.Envelope, item.TenantId));
+                                    }
+                                    continue;
+                                }
                                 if (Metrics.PrometheusText.IsScrape(item.Envelope))
                                 {
                                     if (_metricSink is not null)

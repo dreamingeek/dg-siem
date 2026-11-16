@@ -155,7 +155,7 @@ public sealed partial class HecInput(InputConfig config, DiskBuffer buffer, X509
     /// <c>Authorization: DGSIEM &lt;t&gt;</c> or <c>Bearer &lt;t&gt;</c>, Basic with the token as password, or <c>?token=</c>.
     /// The <c>Splunk</c> scheme is accepted too, because existing HEC clients (Docker's log driver, Vector, Fluent Bit) hardcode it.
     /// </summary>
-    private static string? Token(HttpRequest request)
+    internal static string? Token(HttpRequest request)
     {
         var header = request.Headers.Authorization.ToString();
         foreach (var scheme in (string[])["DGSIEM ", "Bearer ", "Splunk "])
@@ -193,7 +193,7 @@ public sealed partial class HecInput(InputConfig config, DiskBuffer buffer, X509
         return ok;
     }
 
-    private static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken ct)
+    internal static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken ct)
     {
         Stream stream = request.Body;
         if (string.Equals(request.Headers.ContentEncoding, "gzip", StringComparison.OrdinalIgnoreCase))

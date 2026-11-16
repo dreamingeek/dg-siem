@@ -27,7 +27,7 @@ Built on **.NET 10**, **Blazor**, **ClickHouse** and **PostgreSQL**, and runs as
 - **Multi-tenant from the start.** Every event belongs to a tenant (a client), and isolation is enforced twice: in the query compiler and by ClickHouse row policies. Give a client a login that sees only their own logs.
 - **Parsers for common MSP gear:** UniFi, Traefik/Pangolin, CrowdSec, authentik, Asterisk/FreePBX, FreeSWITCH/FusionPBX, Windows, plus generic syslog and JSON. Fields use [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html) names.
 - **Search** with a pipe language (`dataset=unifi.firewall action=block | stats count by source.ip | sort -count`), compiled to parameterized SQL, with a field sidebar, timecharts, event context and saved searches.
-- **Prometheus metrics:** agents scrape `/metrics` pages like a Prometheus job, and `mstats` charts them next to your logs.
+- **Metrics:** agents scrape Prometheus `/metrics` pages or receive InfluxDB line protocol (Proxmox, Telegraf), and `mstats` charts them next to your logs.
 - **Dashboards and alerts:** drag-and-resize dashboards, scheduled searches that email you or open tickets in AlgaPSA, and a health page that notices when a log source goes quiet or an agent drops off.
 - **Storage that stays affordable:** retention per tenant and dataset, an optional S3 cold tier, GeoIP enrichment, optional threat-intel feeds, and nightly encrypted backups.
 
@@ -74,7 +74,7 @@ Before exposing it to the internet, put port 8080 behind a TLS reverse proxy and
 | [Backups](docs/backups.md) | Nightly backups and restores |
 | [GeoIP](docs/geoip.md) | Country, city and ASN enrichment |
 | [Threat intel](docs/threat-intel.md) | Optional blocklist feeds (off by default) |
-| [Metrics](docs/metrics.md) | Scraping Prometheus exporters, charting with `mstats` |
+| [Metrics](docs/metrics.md) | Scraping Prometheus exporters, receiving Proxmox/InfluxDB metrics, charting with `mstats` |
 
 ## Architecture
 
@@ -122,7 +122,7 @@ To run the server outside Docker, point it at PostgreSQL and ClickHouse with `Co
 | **1. Ingest** ✅ | Agent: syslog UDP/TCP/TLS, disk buffer, enrollment + mTLS. UniFi and generic syslog parsers |
 | **2. Search** ✅ | Pipe language, search UI with surrounding-event context, local auth, tenants, row policies |
 | **3. Alerting** ✅ | Scheduled searches → email and AlgaPSA tickets. **MVP** |
-| **4. Inputs** | ✅ Traefik/Pangolin, CrowdSec, Authentik parsers; Asterisk/FreePBX, FreeSWITCH/FusionPBX; file tail; HEC endpoint; Windows agent (event logs); Prometheus metrics. Later: desk phones |
+| **4. Inputs** | ✅ Traefik/Pangolin, CrowdSec, Authentik parsers; Asterisk/FreePBX, FreeSWITCH/FusionPBX; file tail; HEC endpoint; Windows agent (event logs); Prometheus metrics; InfluxDB line protocol (Proxmox). Later: desk phones |
 | **5. Dashboards** ✅ | Panels over saved queries (replaces Grafana) |
 | **6. Tiering** ✅ | Per-tenant/per-dataset retention, S3 cold tier, storage costs, nightly backups |
 | **7. SIEM** | ✅ Health page and quiet-source alerts, GeoIP, threat intel (optional). Next: Sigma rules → query compiler, cases |

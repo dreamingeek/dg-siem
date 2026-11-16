@@ -95,6 +95,10 @@ public enum InputType
     WindowsEventLog,
     /// <summary>Scrape Prometheus <c>/metrics</c> pages (<see cref="InputConfig.Targets"/>), like a Prometheus scrape job.</summary>
     Prometheus,
+    /// <summary>Receive InfluxDB line protocol over HTTP (<c>/api/v2/write</c>, <c>/write</c>): Proxmox's metric server, Telegraf.</summary>
+    InfluxDb,
+    /// <summary>Receive InfluxDB line protocol datagrams over UDP.</summary>
+    InfluxDbUdp,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<MultilineMode>))]
@@ -137,7 +141,7 @@ public sealed class InputConfig
     /// <summary>HEC: HTTPS with the agent's certificate (issued by the DG SIEM CA) instead of plain HTTP.</summary>
     public bool Tls { get; set; }
 
-    /// <summary>Prometheus: the job name, the <c>job</c> label on every sample.</summary>
+    /// <summary>Prometheus and InfluxDB: the job name, the <c>job</c> label on every sample.</summary>
     public string? Job { get; set; }
     /// <summary>Prometheus: <c>host:port</c> to scrape; each becomes the <c>instance</c> label.</summary>
     public List<string>? Targets { get; set; }

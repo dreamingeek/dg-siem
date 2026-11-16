@@ -216,6 +216,11 @@
                                 <code>| mstats avg(metric) by instance span=5m</code>.
                             </p>
                             <pre class="dg-example">{ "type": "Prometheus", "job": "netprox", "targets": ["netprox.example.net:81"], "authorization": { "credentials": "TOKEN" }, "scrapeInterval": "1m" }</pre>
+                            <p class="mb-1">
+                                Pushed metrics in InfluxDB line protocol (Proxmox VE's Metric Server, Telegraf): <code>InfluxDb</code> over HTTP with optional
+                                <code>tokens</code>, or <code>InfluxDbUdp</code>. Names are <code>measurement_field</code>: <code>| mstats avg(cpustat_cpu) by host span=5m</code>.
+                            </p>
+                            <pre class="dg-example">{ "type": "InfluxDb", "port": 8086, "job": "proxmox", "tokens": ["TOKEN"] }</pre>
                             <p class="mb-1">Windows event logs (Windows agents get the default set when they enroll; list channels to change it, with an optional event-log XPath filter):</p>
                             <pre class="dg-example">{ "type": "WindowsEventLog", "channels": [ { "name": "Security" }, { "name": "Microsoft-Windows-TaskScheduler/Operational" }, { "name": "Microsoft-Windows-PowerShell/Operational", "query": "*[System[(EventID=4104)]]" } ] }</pre>
                             <p class="mb-1">Syslog on another port, only from this machine:</p>
