@@ -2,7 +2,7 @@
 # Format: docs/integrations.md
 id: windows
 name: Windows
-version: 1
+version: 2
 category: Endpoints
 description: Sign-ins and failures, lockouts, account and privileged-group changes, new services, cleared logs, and Microsoft Defender detections, read from the event logs by the Windows agent.
 
@@ -32,6 +32,21 @@ dashboards:
       - { title: Failed sign-ins by source, kind: table, w: 6, h: 5, search: 'dataset=windows.security action=logon-failed | stats count() as failures, dc(user) as accounts by src, country, host | sort -failures | head 20' }
       - { title: Remote Desktop sign-ins, kind: table, w: 6, h: 5, search: 'dataset=windows.security action=logged-in winlog.logon.type=RemoteInteractive | stats count() as signins, latest(src) as last_from by user, host | sort -signins | head 20' }
       - { title: Defender detections, kind: table, w: 12, search: 'dataset=windows.defender action IN (malware-detected, suspicious-behavior-detected, malware-action-failed) | stats count() as events, latest(defender.action) as last_action by host, threat.name | sort -events | head 20' }
+  - key: changes
+    name: Windows changes
+    description: Accounts, privileged groups, services, scheduled tasks and cleared logs, plus how people sign in.
+    timeRange: -7d
+    panels:
+      - { title: Accounts created, kind: stat, search: 'dataset=windows.security action=added-user-account | stats count()' }
+      - { title: Added to groups, kind: stat, search: 'dataset=windows.security action=added-member-to-group | stats count()' }
+      - { title: Services installed, kind: stat, search: 'dataset=windows.* action=service-installed | stats count()' }
+      - { title: Logs cleared, kind: stat, search: 'dataset=windows.* action IN (audit-log-cleared, log-cleared) | stats count()' }
+      - { title: Sign-ins by logon type, kind: timebars, w: 8, search: 'dataset=windows.security action=logged-in | timechart count() by winlog.logon.type' }
+      - { title: Busiest machines, kind: bars, search: 'dataset=windows.* | top limit=10 host' }
+      - { title: Account and group changes, kind: table, w: 12, h: 5, search: 'dataset=windows.security action IN (added-user-account, deleted-user-account, disabled-user-account, enabled-user-account, added-member-to-group, changed-password) | head 50 | table @timestamp, host, action, user, user.target.name, group.name' }
+      - { title: Services installed, kind: table, w: 6, h: 5, search: 'dataset=windows.* action=service-installed | stats count() as installs, latest(process.executable) as path by service.name, host | sort -installs | head 20' }
+      - { title: Scheduled tasks created, kind: table, w: 6, h: 5, search: 'dataset=windows.* action=created-scheduled-task | stats count() as tasks by host, user | sort -tasks | head 20' }
+      - { title: Application crashes, kind: bars, w: 12, search: 'dataset=windows.* action IN (application-crashed, application-hung) | top limit=10 host' }
 
 alerts:
 
