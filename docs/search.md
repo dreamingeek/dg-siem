@@ -3,7 +3,7 @@
 DG SIEM uses a Splunk-style pipe language: a search, then commands separated by `|`.
 
 ```
-dataset=unifi.firewall action=drop | stats count() as hits by src | sort -hits | head 10
+dataset=unifi.firewall action=blocked | stats count() as hits by src | sort -hits | head 10
 ```
 
 Every search is limited to the tenants you can see and the selected time range. Results are capped at 10,000 rows (1,000 for raw events unless you `head` more).
@@ -135,7 +135,7 @@ dataset=asterisk.sip | stats latest(ua) by user, src
 ## Examples
 
 ```
-dataset=unifi.firewall action=drop | top limit=20 src
+dataset=unifi.firewall action=blocked | top limit=20 src
 dataset=unifi.os | table @timestamp, host, user, src, message
 dataset=unifi.vpn NOT action=ipsec_keepalive | stats count by host, message | sort -count
 * | timechart span=1h count by dataset

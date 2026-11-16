@@ -55,7 +55,8 @@ public class UnifiParserTests
         var e = Parse("CEF:0|Ubiquiti|UniFi Network|9.3.33|400|Blocked by Firewall|4|UNIFIcategory=Security UNIFIsubCategory=Firewall src=203.0.113.9 spt=51515 dst=192.168.1.5 dpt=443 proto=TCP act=block");
 
         Assert.Equal("unifi.firewall", e.EventDataset); // Security/Firewall CEF joins the iptables-style lines
-        Assert.Equal("block", e.EventAction);
+        Assert.Equal("blocked", e.EventAction);         // one word for every way of saying it
+        Assert.Equal("block", e.Fields["unifi.firewall.action"]);
         Assert.Equal("denied", e.Fields["event.type"]);
         Assert.Equal("203.0.113.9", e.SourceIp);
         Assert.Equal((ushort)51515, e.SourcePort);
@@ -70,7 +71,8 @@ public class UnifiParserTests
         var e = Parse("<4>Nov 11 17:00:00 UDM-Pro kernel: [WAN_IN-D-3000] DESCR=\"Block inbound\" IN=eth8 OUT=br0 MAC=aa:bb:cc:dd:ee:ff SRC=203.0.113.9 DST=192.168.1.5 LEN=60 TTL=50 PROTO=TCP SPT=51515 DPT=22 WINDOW=64240 RES=0x00 SYN URGP=0", hint: "unifi");
 
         Assert.Equal("unifi.firewall", e.EventDataset);
-        Assert.Equal("drop", e.EventAction);
+        Assert.Equal("blocked", e.EventAction);
+        Assert.Equal("drop", e.Fields["unifi.firewall.action"]);
         Assert.Equal("denied", e.Fields["event.type"]);
         Assert.Equal("WAN_IN-D-3000", e.Fields["rule.name"]);
         Assert.Equal("Block inbound", e.Fields["rule.description"]);
