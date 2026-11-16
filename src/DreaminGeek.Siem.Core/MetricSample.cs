@@ -61,3 +61,27 @@ public static class MetricScrape
         return parsed is not null;
     }
 }
+
+/// <summary>How agents ship pushed metrics (InfluxDB line protocol): one envelope per request or batch of datagrams.</summary>
+public static class MetricPush
+{
+    /// <summary>Envelope input prefix; the rest is the input's job name (<c>influx:proxmox</c>).</summary>
+    public const string InputPrefix = "influx:";
+
+    /// <summary>First line of the message: <c># dgsiem_influx precision=ns</c> (ns, us, ms, s, or auto: guessed from the size).</summary>
+    public const string HeaderPrefix = "# dgsiem_influx precision=";
+
+    public static RawEnvelope Envelope(string? job, string? source, string precision, string lines) =>
+        new(DateTimeOffset.UtcNow, InputPrefix + (string.IsNullOrWhiteSpace(job) ? "influxdb" : job), source, HeaderPrefix + precision + "\n" + lines);
+
+    /// <summary>The <c>precision</c> query parameter (v1 also says h/m/u/n); null when it's not one InfluxDB accepts.</summary>
+    public static string? Precision(string? value) => value switch
+    {
+        null or "" => "auto", // InfluxDB assumes ns; guessing also copes with senders that write seconds
+        "ns" or "n" => "ns",
+        "us" or "u" => "us",
+        "ms" => "ms",
+        "s" => "s",
+        _ => null,
+    };
+}

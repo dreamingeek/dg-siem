@@ -121,6 +121,8 @@ public sealed partial class AgentService(IOptions<AgentOptions> options, ILogger
                 InputType.SyslogTls => () => new SyslogTcpInput(input, hints, buffer, certificate, logger).RunAsync(ct),
                 InputType.File => () => new FileTailInput(input, buffer, positions, logger).RunAsync(ct),
                 InputType.Hec => () => new HecInput(input, buffer, certificate, logger).RunAsync(ct),
+                InputType.InfluxDb => () => new InfluxHttpInput(input, buffer, certificate, logger).RunAsync(ct),
+                InputType.InfluxDbUdp => () => new InfluxUdpInput(input, buffer, logger).RunAsync(ct),
                 InputType.Prometheus => async () =>
                 {
                     using var scraper = new PrometheusInput(input, buffer, logger);
