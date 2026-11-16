@@ -56,7 +56,8 @@ public sealed class SmtpEmailSender : IEmailSender
             {
                 await client.AuthenticateAsync(settings.Username, settings.Password ?? string.Empty, ct);
             }
-            await client.SendAsync(message, ct);
+            // MailKit 5 sends a request; a rejected recipient still throws (SmtpCommandException), as before.
+            await client.SendAsync(new MailKit.SendRequest(message), ct);
             await client.DisconnectAsync(true, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException && ex is SmtpCommandException or SmtpProtocolException
