@@ -15,29 +15,31 @@ An alert is a search that runs on a schedule. When it matches, DG SIEM emails th
 
 Passwords and API keys are stored encrypted with the same key ring as login cookies (`/var/lib/dg-siem/keys`). If that folder is lost, enter them again.
 
-## Security alerts
+## Ready-made alerts
 
-**Alerts → Add ready-made alerts** adds detections for the sources DG SIEM parses, the two health alerts (a log source went quiet, an agent offline or falling behind: see [health.md](health.md)), and, when threat intel is on, two for known-bad addresses ([threat-intel.md](threat-intel.md)). Each runs for every tenant separately, emails the admin who added it, and opens an AlgaPSA ticket when it's High or Critical. They start switched on and are ordinary alerts afterwards: edit thresholds, **Test now**, or turn them off.
+Alerts for a particular source come with its [integration pack](integrations.md): installing the pack adds them switched off, and they run only for the tenants the pack is on for. Open one from the pack's page to turn it on and choose who hears about it.
+
+| Pack | Alerts |
+|---|---|
+| Windows | Repeated failed sign-ins from one source; account locked out; added to a privileged group; new user account; security or event log cleared; Remote Desktop sign-in from the internet; new service installed. Defender: malware detected; couldn't remove malware; protection turned off; signature updates failing |
+| Phone systems | PBX: SIP brute force; SIP trunk not registering |
+| authentik | Repeated failed logins; sign-in from an unusual country (edit the country list) |
+| UniFi | Someone signed in to UniFi OS; one source hammering the firewall |
+| Pangolin / Traefik | A site is returning errors |
+| Proxmox VE | Stopped sending metrics; node CPU high; storage almost full |
+
+If you added the Windows, Defender, PBX or authentik alerts from the old ready-made list, installing the pack takes them over (same name), keeping whether they're on and who they notify, and turns the pack on for the tenants already sending that data, so they keep running where they did.
+
+**Alerts → Add ready-made alerts** still adds the ones that aren't about one source. Each runs for every tenant separately, emails the admin who added it, and opens an AlgaPSA ticket when it's High or Critical. They start switched on and are ordinary alerts afterwards: edit thresholds, **Test now**, or turn them off.
 
 | Alert | Severity | Fires on |
 |---|---|---|
-| Windows: repeated failed sign-ins from one source | High | 20+ failures, or 5+ accounts tried, from one address in 15 minutes (guessing, spraying) |
-| Windows: account locked out | Medium | Lockouts (4740), with the computer the attempts came from |
-| Windows: added to a privileged group | High | Members added to Administrators, Domain/Enterprise/Schema Admins, Account/Backup Operators, Remote Desktop Users, DnsAdmins |
-| Windows: new user account | Medium | Accounts created (4720) |
-| Windows: security or event log cleared | Critical | 1102 / 104 |
-| Windows: remote desktop sign-in from the internet | High | RDP sign-ins from public addresses (add `NOT src=` for a known VPN address) |
-| Windows: new service installed | Medium | 7045 / 4697 (quiet for a day per service) |
-| Defender: malware detected | High | Detections and suspicious behaviour |
-| Defender: couldn't remove malware | Critical | The remediation failed |
-| Defender: protection turned off | Critical | Real-time/virus/spyware protection off, tamper protection blocked a change |
-| Defender: signature updates failing | Medium | Checked every 4 hours |
-| PBX: SIP brute force | Medium | 50+ failed SIP requests from one address in 15 minutes (FreePBX, FusionPBX) |
-| PBX: SIP trunk not registering | High | 3+ trunk ping/registration failures in 15 minutes |
-| authentik: repeated failed logins | High | 10+ failures, or 5+ accounts, from one address in 15 minutes |
+| A log source went quiet | High | A host stopped sending a dataset for longer than usual ([health.md](health.md)) |
+| An agent is offline or falling behind | High | No check-in for 30 minutes, a backed-up buffer, or a scrape target down ([health.md](health.md)) |
 | No logs from a tenant | High | A tenant sent nothing for an hour (turn it off for tenants that aren't sending yet) |
+| Traffic to a known-bad address / Sign-in from a known-bad address | High / Critical | Only when threat intel is on ([threat-intel.md](threat-intel.md)) |
 
-Alerts already added are shown as such, so the list can be opened again when new detections are added.
+Alerts already added are shown as such, so the list can be opened again.
 
 ## Create an alert
 

@@ -33,9 +33,10 @@
                 {
                     <span class="flex-grow-1"></span>
                     <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="StartersAsync">
-                        Add @(_missingStarters == StarterDashboards.All.Count ? "the starter dashboards" : $"{_missingStarters} missing starter dashboard{(_missingStarters == 1 ? "" : "s")}")
+                        Add the Security overview dashboard
                     </button>
                 }
+                <span class="small text-body-secondary@(_missingStarters > 0 ? "" : " ms-auto")">Dashboards for each source come with its <a href="integrations">integration pack</a>.</span>
             </form>
         </div>
     </section>

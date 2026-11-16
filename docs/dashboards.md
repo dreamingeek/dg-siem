@@ -2,15 +2,21 @@
 
 Dashboards are panels built from searches, on a drag-and-resize grid. They're under **Dashboards** in the side rail (global admins).
 
-## Starter dashboards
+## Ready-made dashboards
 
-On an empty Dashboards page, **Add the starter dashboards** creates three you can edit or delete:
+Dashboards for one source come with its [integration pack](integrations.md): installing the pack adds them.
 
-- **Security overview**: CrowdSec bans, authentik failed logins, scanner requests and UniFi firewall blocks; bans by scenario and country; failed logins by user and source; what scanners probe for.
-- **Pangolin traffic**: requests, 4xx/5xx and p95 response time; traffic by resource; errors by status; top clients; slowest resources.
-- **UniFi firewall**: blocks per tenant, top rules, blocked sources and destination ports.
+| Pack | Dashboard |
+|---|---|
+| Pangolin / Traefik | **Pangolin traffic**: requests, 4xx/5xx and p95 response time; traffic by resource; errors by status; top clients; slowest resources |
+| UniFi | **UniFi firewall**: blocks per tenant, top rules, blocked sources and destination ports |
+| CrowdSec | **CrowdSec**: bans, scenarios, countries and networks, most banned addresses |
+| authentik | **authentik sign-ins**: sign-ins and failures over time, by country, by user and source |
+| Windows | **Windows security**: failed sign-ins, lockouts, Remote Desktop sign-ins, Defender detections |
+| Phone systems | **Phone systems**: failed SIP attempts, who's trying, trunk failures, failed calls |
+| Proxmox VE | **Proxmox overview**: nodes, guests, CPU, memory, network, storage |
 
-If you delete one, the button comes back so you can recreate it.
+**Security overview** spans several sources (CrowdSec bans, authentik failed logins, scanner requests and UniFi firewall blocks; bans by scenario and country; what scanners probe for), so it stays a starter: **Add the Security overview dashboard** on the Dashboards page creates it, and the button comes back if you delete it.
 
 ## Viewing
 

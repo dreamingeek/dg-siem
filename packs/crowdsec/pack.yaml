@@ -1,0 +1,38 @@
+# CrowdSec: decisions (bans), triggered scenarios and AppSec notices from CrowdSec's logs, sent as syslog.
+# Format: docs/integrations.md
+id: crowdsec
+name: CrowdSec
+version: 1
+category: Security
+description: Bans and the scenarios behind them, with the banned address's country and network, from CrowdSec's own logs.
+docs: https://docs.crowdsec.net/
+
+setup:
+  input:
+    type: SyslogUdp
+    port: 514
+  steps:
+    - Every agent listens for syslog on UDP 514 already; **Add to agent** checks the one you pick does.
+    - "CrowdSec in Docker (e.g. next to Pangolin): send the container's output to the agent with Docker's syslog log driver. In the `crowdsec` service of the compose file add `logging:` with `driver: syslog` and options `syslog-address: \"udp://AGENT:514\"`, `tag: crowdsec`, `syslog-format: rfc5424`, then `docker compose up -d crowdsec`."
+    - "CrowdSec installed as a package: forward its log with rsyslog's imfile, or tail `/var/log/crowdsec.log` with a File input (`app: crowdsec`)."
+    - The local API's access log (bouncers polling every few seconds) arrives as `crowdsec.lapi`; add a drop rule for that dataset if you don't need it.
+
+receiving:
+  search: 'dataset=crowdsec.* | stats count() as events | where events > 0'
+  within: 1d
+
+dashboards:
+  - key: crowdsec
+    name: CrowdSec
+    description: Bans, scenarios and where the banned addresses come from.
+    timeRange: -24h
+    panels:
+      - { title: Bans, kind: stat, search: 'dataset=crowdsec.decision | stats count()' }
+      - { title: Banned addresses, kind: stat, search: 'dataset=crowdsec.decision | stats dc(src)' }
+      - { title: Scenarios triggered, kind: stat, search: 'dataset=crowdsec.alert | stats count()' }
+      - { title: Countries, kind: stat, search: 'dataset=crowdsec.decision | stats dc(country)' }
+      - { title: Bans by scenario, kind: timebars, w: 8, search: 'dataset=crowdsec.decision | timechart count() by rule.name' }
+      - { title: Top scenarios, kind: bars, search: 'dataset=crowdsec.decision | top limit=10 rule.name' }
+      - { title: Bans by country, kind: map, search: 'dataset=crowdsec.decision | stats count() by country' }
+      - { title: Top banned networks, kind: bars, w: 6, h: 5, search: 'dataset=crowdsec.decision | top limit=10 org' }
+      - { title: Most banned addresses, kind: table, w: 12, search: 'dataset=crowdsec.decision | stats count() as bans, latest(rule.name) as last_scenario by src, country, org | sort -bans | head 20' }

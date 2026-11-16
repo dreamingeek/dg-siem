@@ -1,0 +1,60 @@
+# authentik: sign-ins, failed logins and other audit events from authentik's JSON logs, sent as syslog.
+# Format: docs/integrations.md
+id: authentik
+name: authentik
+version: 1
+category: Identity
+description: Sign-ins, failed logins, password changes and app authorizations from authentik, with the user, address, country and network.
+docs: https://docs.goauthentik.io/
+
+setup:
+  input:
+    type: SyslogUdp
+    port: 514
+  steps:
+    - Every agent listens for syslog on UDP 514 already; **Add to agent** checks the one you pick does.
+    - "authentik installed natively (logs to journald): forward them with rsyslog. Create `/etc/rsyslog.d/50-dg-siem.conf` with `*.* @AGENT:514` (or `@@AGENT:514` for TCP; this forwards the whole host's log, which the agent's parsers sort) and run `systemctl restart rsyslog`."
+    - "authentik in Docker: give the `server` and `worker` services Docker's syslog log driver: `logging:` with `driver: syslog` and options `syslog-address: \"udp://AGENT:514\"`, `tag: authentik`."
+    - Routine background-task chatter arrives as `authentik.tasks`; add a drop rule for that dataset if you don't need it.
+
+receiving:
+  search: 'dataset=authentik.* | stats count() as events | where events > 0'
+  within: 1d
+
+dashboards:
+  - key: sign-ins
+    name: authentik sign-ins
+    description: Who signed in, who failed, and from where.
+    timeRange: -7d
+    panels:
+      - { title: Sign-ins, kind: stat, search: 'dataset=authentik.event action=login | stats count()' }
+      - { title: Failed logins, kind: stat, search: 'dataset=authentik.event action=login_failed | stats count()' }
+      - { title: Users signed in, kind: stat, search: 'dataset=authentik.event action=login | stats dc(user)' }
+      - { title: Countries, kind: stat, search: 'dataset=authentik.event action IN (login, login_failed) | stats dc(country)' }
+      - { title: Sign-ins and failures, kind: timebars, w: 8, search: 'dataset=authentik.event action IN (login, login_failed) | timechart count() by action' }
+      - { title: Sign-ins by country, kind: map, w: 4, h: 4, search: 'dataset=authentik.event action=login | stats count() by country' }
+      - { title: Failed logins by user and source, kind: table, w: 6, h: 5, search: 'dataset=authentik.event action=login_failed | stats count() as failures by user, src, country | sort -failures | head 20' }
+      - { title: Sign-ins by user, kind: table, w: 6, h: 5, search: 'dataset=authentik.event action=login | stats count() as signins, dc(src) as addresses, latest(src) as last_from by user | sort -signins | head 20' }
+
+alerts:
+
+  - key: repeated-failed-logins
+    name: 'authentik: repeated failed logins'
+    description: '10 or more failed logins, or 5 or more accounts tried, from one address in 15 minutes.'
+    search: 'dataset=authentik.event action=login_failed | stats count() as tries, dc(user) as accounts by src, country | where tries >= 10 OR accounts >= 5'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'source.ip'
+    suppressMinutes: 60
+  - key: login-from-new-country
+    name: 'authentik: sign-in from an unusual country'
+    description: 'A successful sign-in from a country other than the ones listed in the search. Edit the list to the countries your users sign in from.'
+    search: 'dataset=authentik.event action=login country=* NOT country IN (US) | table @timestamp, user, src, country, org'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'user.name,source.ip'
+    suppressMinutes: 720

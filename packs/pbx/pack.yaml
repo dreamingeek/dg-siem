@@ -1,0 +1,56 @@
+# Phone systems: FreePBX/Asterisk and FusionPBX/FS PBX/FreeSWITCH logs, tailed by an agent on the PBX.
+# Format: docs/integrations.md
+id: pbx
+name: Phone systems
+version: 1
+category: Voice
+description: SIP brute force and extension scanning, registrations, trunk failures and failed calls from FreePBX (Asterisk) and FusionPBX or FS PBX (FreeSWITCH).
+
+setup:
+  steps:
+    - Install an agent on the PBX, for the tenant it belongs to (**Administration → Agents → Enroll an agent**). The PBX must be able to reach the server's agent port.
+    - "**FreePBX / Asterisk:** on the Agents page, add a File input: `{ \"type\": \"File\", \"paths\": [\"/var/log/asterisk/full\"], \"app\": \"asterisk\", \"multiline\": \"Pattern\", \"multilineStart\": \"^\\\\[\\\\d{4}-\" }`. If the agent can't read it: `usermod -aG asterisk dg-siem-agent && systemctl restart dg-siem-agent`. For Asterisk's security events too, add the `security` level to `full` in **Settings → Asterisk Logfile Settings**."
+    - "**FusionPBX / FS PBX / FreeSWITCH:** add a File input: `{ \"type\": \"File\", \"paths\": [\"/var/log/freeswitch/freeswitch.log\"], \"app\": \"freeswitch\", \"multiline\": \"Pattern\", \"multilineStart\": \"^([0-9a-f-]{36} )?\\\\d{4}-\\\\d\\\\d-\\\\d\\\\d \" }`. FreeSWITCH runs as `www-data`: `usermod -aG www-data dg-siem-agent && systemctl restart dg-siem-agent`."
+    - "FusionPBX logs at DEBUG: add a drop rule for dataset `freeswitch.log`, field `log.level`, equals `debug`. More in docs/phones.md."
+
+receiving:
+  search: '(dataset=asterisk.* OR dataset=freeswitch.*) | stats count() as events | where events > 0'
+  within: 1d
+
+dashboards:
+  - key: phones
+    name: Phone systems
+    description: Who's scanning and guessing at the PBXs, and whether the trunks are registered.
+    timeRange: -24h
+    panels:
+      - { title: Failed SIP attempts, kind: stat, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats count()' }
+      - { title: Addresses trying, kind: stat, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats dc(src)' }
+      - { title: Trunk failures, kind: stat, search: '(dataset=freeswitch.registration action IN (gateway-ping-failed, gateway-registration-failed)) OR (dataset=asterisk.log log.origin.file.name=res_pjsip_outbound_registration.c level IN (warning, error)) | stats count()' }
+      - { title: Failed calls, kind: stat, search: 'dataset=freeswitch.call action=hangup outcome=failure | stats count()' }
+      - { title: Failed SIP attempts by PBX, kind: timebars, w: 8, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | timechart count() by host' }
+      - { title: Where attempts come from, kind: map, w: 4, h: 4, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats count() by country' }
+      - { title: Top addresses trying, kind: table, w: 6, h: 5, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats count() as tries, dc(user) as extensions by src, country, org | sort -tries | head 20' }
+      - { title: Extensions tried most, kind: bars, w: 6, h: 5, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | top limit=10 user' }
+
+alerts:
+
+  - key: sip-brute-force
+    name: 'PBX: SIP brute force'
+    description: '50 or more failed SIP registrations or calls from one address in 15 minutes against FreePBX or FusionPBX. Internet-facing PBXs see scanning all the time; this is the heavy end.'
+    search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats count() as tries, dc(user) as extensions by src, country, host | where tries >= 50'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'source.ip'
+    suppressMinutes: 360
+  - key: sip-trunk-not-registering
+    name: 'PBX: SIP trunk not registering'
+    description: 'The SIP trunk failed to register or answer pings 3 or more times in 15 minutes: outside calls may not work.'
+    search: '(dataset=freeswitch.registration action IN (gateway-ping-failed, gateway-registration-failed)) OR (dataset=asterisk.log log.origin.file.name=res_pjsip_outbound_registration.c level IN (warning, error)) | stats count() as failures by host | where failures >= 3'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'host.name'
+    suppressMinutes: 120

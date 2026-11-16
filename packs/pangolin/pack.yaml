@@ -1,0 +1,67 @@
+# Pangolin / Traefik: the reverse proxy's JSON access log, read by an agent on the Pangolin host.
+# Format: docs/integrations.md
+id: pangolin
+name: Pangolin / Traefik
+version: 1
+category: Web
+description: Every request through Pangolin's Traefik (or any Traefik), with the site, status, response time, client, country and network, and the scanners hitting hostnames you don't serve.
+docs: https://doc.traefik.io/traefik/observability/access-logs/
+
+setup:
+  input:
+    type: File
+    paths: ["/opt/pangolin/config/traefik/logs/access.log"]
+    app: traefik-access
+  steps:
+    - Install an agent on the Pangolin (Traefik) host, for the tenant that owns it.
+    - "Turn on Traefik's JSON access log. For Pangolin, add to `config/traefik/traefik_config.yml`: `accessLog:` with `filePath: \"/var/log/traefik/access.log\"` and `format: json`; make sure the traefik service in the compose file has the volume `./config/traefik/logs:/var/log/traefik`; then `docker compose up -d traefik`."
+    - Add the input below with **Add to agent**. Change the path if Pangolin isn't in `/opt/pangolin` (edit the input on the Agents page).
+    - "If the agent can't read the file, give it access: `setfacl -m u:dg-siem-agent:rx /opt/pangolin/config/traefik/logs` and `setfacl -m u:dg-siem-agent:r /opt/pangolin/config/traefik/logs/access.log`."
+
+receiving:
+  search: 'dataset=traefik.access | stats count() as requests | where requests > 0'
+  within: 1h
+
+dashboards:
+
+  - key: pangolin-traffic
+    name: 'Pangolin traffic'
+    description: 'Requests through Traefik/Pangolin: volume, errors, latency and clients.'
+    timeRange: '-24h'
+    panels:
+      - { title: 'Requests', kind: stat, x: 0, y: 0, w: 3, h: 2,
+          search: 'dataset=traefik.access | stats count()' }
+      - { title: 'Server errors (5xx)', kind: stat, x: 3, y: 0, w: 3, h: 2,
+          search: 'dataset=traefik.access status>=500 | stats count()' }
+      - { title: 'Client errors (4xx)', kind: stat, x: 6, y: 0, w: 3, h: 2,
+          search: 'dataset=traefik.access status>=400 status<500 | stats count()' }
+      - { title: 'p95 response time', kind: stat, unit: duration, x: 9, y: 0, w: 3, h: 2,
+          search: 'dataset=traefik.access action=proxied | stats p95(event.duration)' }
+      - { title: 'Requests by resource', kind: timearea, x: 0, y: 2, w: 8, h: 4,
+          search: 'dataset=traefik.access action=proxied | timechart count() by resource' }
+      - { title: 'Top resources', kind: bars, x: 8, y: 2, w: 4, h: 4,
+          search: 'dataset=traefik.access action=proxied | top limit=10 resource' }
+      - { title: 'Errors by status', kind: timebars, x: 0, y: 6, w: 8, h: 4,
+          search: 'dataset=traefik.access status>=400 | timechart count() by status' }
+      - { title: 'Status codes', kind: pie, x: 8, y: 6, w: 4, h: 4,
+          search: 'dataset=traefik.access | top limit=8 status' }
+      - { title: 'Top clients', kind: table, x: 0, y: 10, w: 6, h: 4,
+          search: 'dataset=traefik.access | stats count() as requests by src | sort -requests | head 15' }
+      - { title: 'Slowest resources (p95)', kind: bars, unit: duration, x: 6, y: 10, w: 6, h: 4,
+          search: 'dataset=traefik.access action=proxied | stats p95(event.duration) as p95 by resource | sort -p95 | head 10' }
+      - { title: 'Requests by country', kind: map, x: 0, y: 14, w: 6, h: 5,
+          search: 'dataset=traefik.access | stats count() by country' }
+      - { title: 'Top client networks', kind: bars, x: 6, y: 14, w: 6, h: 5,
+          search: 'dataset=traefik.access | top limit=10 org' }
+
+alerts:
+  - key: server-errors
+    name: 'Pangolin: a site is returning errors'
+    description: '50 or more server errors (5xx) from one site in 15 minutes: the service behind it is down or failing.'
+    search: 'dataset=traefik.access status>=500 | stats count() as errors, latest(status) as last_status by resource, domain | where errors >= 50'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'pangolin.resource.name'
+    suppressMinutes: 120

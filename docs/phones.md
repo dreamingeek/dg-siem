@@ -1,5 +1,7 @@
 # Phones and PBXs
 
+The **Phone systems** [integration pack](integrations.md) (**Integrations**) has these setup steps, a dashboard and the alerts.
+
 ## Asterisk / FreePBX
 
 Install the agent on the PBX (Administration → Agents → **Enroll agent** gives a one-line install command; the PBX must be able to reach the server's agent port) and give it a `File` input for Asterisk's `full` log:
