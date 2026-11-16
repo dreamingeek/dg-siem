@@ -2,7 +2,7 @@
 # Format: docs/integrations.md
 id: unifi
 name: UniFi
-version: 1
+version: 2
 category: Network
 description: Firewall blocks, admin sign-ins, VPN, Wi-Fi and system events from UniFi gateways and consoles, sent as syslog.
 docs: https://help.ui.com/hc/en-us/articles/33349041044119
@@ -30,27 +30,27 @@ dashboards:
     timeRange: '-24h'
     panels:
       - { title: 'Blocked', kind: stat, x: 0, y: 0, w: 3, h: 2,
-          search: 'dataset=unifi.firewall action=blocked | stats count()' }
+          search: 'dataset=unifi.firewall event.type=denied | stats count()' }
       - { title: 'Blocked sources', kind: stat, x: 3, y: 0, w: 3, h: 2,
-          search: 'dataset=unifi.firewall action=blocked | stats dc(src)' }
+          search: 'dataset=unifi.firewall event.type=denied | stats dc(src)' }
       - { title: 'Firewall events', kind: stat, x: 6, y: 0, w: 3, h: 2,
           search: 'dataset=unifi.firewall | stats count()' }
       - { title: 'UniFi events', kind: stat, x: 9, y: 0, w: 3, h: 2,
           search: 'dataset=unifi* | stats count()' }
       - { title: 'Blocks by tenant', kind: timebars, x: 0, y: 2, w: 8, h: 4,
-          search: 'dataset=unifi.firewall action=blocked | timechart count() by tenant' }
+          search: 'dataset=unifi.firewall event.type=denied | timechart count() by tenant' }
       - { title: 'Top rules', kind: bars, x: 8, y: 2, w: 4, h: 4,
           search: 'dataset=unifi.firewall | top limit=10 rule.name' }
       - { title: 'Top blocked sources', kind: bars, x: 0, y: 6, w: 4, h: 4,
-          search: 'dataset=unifi.firewall action=blocked | top limit=10 src' }
+          search: 'dataset=unifi.firewall event.type=denied | top limit=10 src' }
       - { title: 'Blocked destination ports', kind: table, x: 4, y: 6, w: 4, h: 4,
-          search: 'dataset=unifi.firewall action=blocked | stats count() by dport, proto | sort -count | head 15' }
+          search: 'dataset=unifi.firewall event.type=denied | stats count() by dport, proto | sort -count | head 15' }
       - { title: 'UniFi events by dataset', kind: timeline, x: 8, y: 6, w: 4, h: 4,
           search: 'dataset=unifi* | timechart count() by dataset' }
       - { title: 'Blocked by country', kind: map, x: 0, y: 10, w: 6, h: 5,
-          search: 'dataset=unifi.firewall action=blocked | stats count() by country' }
+          search: 'dataset=unifi.firewall event.type=denied | stats count() by country' }
       - { title: 'Top blocked networks', kind: bars, x: 6, y: 10, w: 6, h: 5,
-          search: 'dataset=unifi.firewall action=blocked | top limit=10 org' }
+          search: 'dataset=unifi.firewall event.type=denied | top limit=10 org' }
 
 alerts:
   - key: admin-signed-in
@@ -66,7 +66,7 @@ alerts:
   - key: firewall-hammered
     name: 'UniFi: one source hammering the firewall'
     description: '500 or more blocked connections from one address in 15 minutes: a scan or an attack aimed at you specifically.'
-    search: 'dataset=unifi.firewall action=blocked | stats count() as blocks, dc(dport) as ports by src, country, org, host | where blocks >= 500'
+    search: 'dataset=unifi.firewall event.type=denied | stats count() as blocks, dc(dport) as ports by src, country, org, host | where blocks >= 500'
     timeRange: 15m
     schedule: '*/5 * * * *'
     trigger: per-result

@@ -123,6 +123,18 @@ public sealed class UnifiParser : IEventParser
         System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.ExplicitCapture,
         TimeSpan.FromMilliseconds(50));
 
+    /// <summary>
+    /// One vocabulary for firewall verdicts, whichever way the gateway said it (CEF <c>act=block</c>, a kernel rule's
+    /// <c>-D-</c>/<c>-R-</c>, "Blocked by Firewall"): <c>event.action</c> is <c>blocked</c> or <c>allowed</c> and
+    /// <c>event.type</c> <c>denied</c> or <c>allowed</c>. The gateway's own word stays in <c>unifi.firewall.action</c>.
+    /// </summary>
+    private static void SetFirewallAction(LogEvent e, string raw, string? type)
+    {
+        e.Fields["unifi.firewall.action"] = raw;
+        e.EventAction = type switch { "denied" => "blocked", "allowed" => "allowed", _ => raw };
+        e.Fields["event.type"] = type ?? raw;
+    }
+
     /// <summary><c>DHCPACK(br0) 10.1.1.200 02:00:5e:10:00:04 LAPTOP-01</c> → action, client ip/mac/hostname, interface.</summary>
     private static bool TryMapDhcp(string body, LogEvent e)
     {
@@ -401,10 +413,9 @@ public sealed class UnifiParser : IEventParser
               : cef.Name.StartsWith("Allowed", StringComparison.OrdinalIgnoreCase) ? "allowed" : null);
         if (action is not null)
         {
-            e.EventAction = action;
-            e.Fields["event.type"] = action is "block" or "blocked" or "drop" or "dropped" or "deny" or "denied" or "reject" or "rejected"
-                ? "denied"
-                : action is "allow" or "allowed" or "accept" or "accepted" or "pass" ? "allowed" : action;
+            SetFirewallAction(e, action,
+                action is "block" or "blocked" or "drop" or "dropped" or "deny" or "denied" or "reject" or "rejected" ? "denied"
+                : action is "allow" or "allowed" or "accept" or "accepted" or "pass" ? "allowed" : null);
         }
 
         MapUnifiEndpoints(x, e);
@@ -468,8 +479,7 @@ public sealed class UnifiParser : IEventParser
         var action = KernelFirewall.ActionFromRule(fw.Rule);
         if (action is not null)
         {
-            e.EventAction = action;
-            e.Fields["event.type"] = action is "accept" or "return" ? "allowed" : "denied";
+            SetFirewallAction(e, action, action is "accept" or "return" ? "allowed" : "denied");
         }
         if (fw.Rule is not null)
         {

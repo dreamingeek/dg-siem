@@ -18,7 +18,7 @@ public static class StarterDashboards
             P("CrowdSec bans", "dataset=crowdsec.decision | stats count()", PanelKind.Stat, 0, 0, 3, 2),
             P("Failed logins", "dataset=authentik.event action=login_failed | stats count()", PanelKind.Stat, 3, 0, 3, 2),
             P("Scanner requests", "dataset=traefik.access action=unrouted | stats count()", PanelKind.Stat, 6, 0, 3, 2),
-            P("Firewall blocks", "dataset=unifi.firewall action=blocked | stats count()", PanelKind.Stat, 9, 0, 3, 2),
+            P("Firewall blocks", "dataset=unifi.firewall event.type=denied | stats count()", PanelKind.Stat, 9, 0, 3, 2),
             P("Bans by scenario", "dataset=crowdsec.decision | timechart count() by rule.name", PanelKind.TimeBars, 0, 2, 7, 4),
             P("Bans by country", "dataset=crowdsec.decision | stats count() by source.geo.country_iso_code", PanelKind.Map, 7, 2, 5, 4),
             P("Failed logins by user and source", "dataset=authentik.event action=login_failed | stats count() by user, src | sort -count | head 20", PanelKind.Table, 0, 6, 6, 4),
