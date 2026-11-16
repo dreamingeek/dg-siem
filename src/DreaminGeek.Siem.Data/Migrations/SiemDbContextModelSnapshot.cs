@@ -132,6 +132,15 @@ namespace DreaminGeek.Siem.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("PackHash")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PackId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PackItem")
+                        .HasColumnType("text");
+
                     b.Property<string>("Query")
                         .IsRequired()
                         .HasColumnType("text");
@@ -171,6 +180,8 @@ namespace DreaminGeek.Siem.Data.Migrations
                         .IsUnique();
 
                     b.HasIndex("TenantId");
+
+                    b.HasIndex("PackId", "PackItem");
 
                     b.ToTable("AlertRules");
                 });
@@ -264,6 +275,15 @@ namespace DreaminGeek.Siem.Data.Migrations
                     b.Property<Guid>("OwnerId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("PackHash")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PackId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PackItem")
+                        .HasColumnType("text");
+
                     b.Property<int>("RefreshSeconds")
                         .HasColumnType("integer");
 
@@ -281,6 +301,8 @@ namespace DreaminGeek.Siem.Data.Migrations
 
                     b.HasIndex("Name")
                         .IsUnique();
+
+                    b.HasIndex("PackId", "PackItem");
 
                     b.ToTable("Dashboards");
                 });
@@ -364,6 +386,26 @@ namespace DreaminGeek.Siem.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("EnrollmentTokens");
+                });
+
+            modelBuilder.Entity("DreaminGeek.Siem.Data.Entities.InstalledPack", b =>
+                {
+                    b.Property<string>("PackId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("InstalledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer");
+
+                    b.HasKey("PackId");
+
+                    b.ToTable("InstalledPacks");
                 });
 
             modelBuilder.Entity("DreaminGeek.Siem.Data.Entities.SavedSearch", b =>
@@ -528,6 +570,26 @@ namespace DreaminGeek.Siem.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.ToTable("TenantMemberships");
+                });
+
+            modelBuilder.Entity("DreaminGeek.Siem.Data.Entities.TenantPack", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PackId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("EnabledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Token")
+                        .HasColumnType("text");
+
+                    b.HasKey("TenantId", "PackId");
+
+                    b.ToTable("TenantPacks");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", b =>
@@ -730,6 +792,17 @@ namespace DreaminGeek.Siem.Data.Migrations
                     b.Navigation("Tenant");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("DreaminGeek.Siem.Data.Entities.TenantPack", b =>
+                {
+                    b.HasOne("DreaminGeek.Siem.Data.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>

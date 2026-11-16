@@ -172,10 +172,23 @@ public sealed partial class AlertRunner(
             ? evaluator.EvaluateAsync(rule, tenant, from, to, ct)
             : health.EvaluateAsync(rule, tenant, now, ct);
 
-    private static async Task<List<Tenant>> TenantsAsync(SiemDbContext db, AlertRule rule, CancellationToken ct) =>
-        rule.TenantId is { } id
-            ? await db.Tenants.AsNoTracking().Where(t => t.Id == id).ToListAsync(ct)
-            : await db.Tenants.AsNoTracking().OrderBy(t => t.Slug).ToListAsync(ct);
+    /// <summary>
+    /// The rule's tenant, or every tenant. An integration pack's rule runs only for the tenants that have the pack
+    /// turned on, so a "stopped sending" check doesn't fire for tenants that never sent.
+    /// </summary>
+    internal static async Task<List<Tenant>> TenantsAsync(SiemDbContext db, AlertRule rule, CancellationToken ct)
+    {
+        var tenants = db.Tenants.AsNoTracking();
+        if (rule.TenantId is { } id)
+        {
+            tenants = tenants.Where(t => t.Id == id);
+        }
+        if (rule.PackId is { } pack)
+        {
+            tenants = tenants.Where(t => db.TenantPacks.Any(p => p.TenantId == t.Id && p.PackId == pack));
+        }
+        return await tenants.OrderBy(t => t.Slug).ToListAsync(ct);
+    }
 
     private static string FirstLine(string message) => message.Split('\n')[0].Trim();
 

@@ -178,6 +178,9 @@ if (!isAdminCommand)
     builder.Services.AddSingleton<DreaminGeek.Siem.Web.Search.SuggestService>();
     builder.Services.AddSingleton<DreaminGeek.Siem.Web.Alerts.AlertAdminService>();
     builder.Services.AddSingleton<DreaminGeek.Siem.Web.Dashboards.DashboardService>();
+    builder.Services.Configure<DreaminGeek.Siem.Web.Integrations.PackOptions>(builder.Configuration.GetSection(DreaminGeek.Siem.Web.Integrations.PackOptions.SectionName));
+    builder.Services.AddSingleton<DreaminGeek.Siem.Web.Integrations.PackCatalog>();
+    builder.Services.AddSingleton<DreaminGeek.Siem.Web.Integrations.IntegrationService>();
 
     builder.Services.AddRazorComponents()
         .AddInteractiveServerComponents();

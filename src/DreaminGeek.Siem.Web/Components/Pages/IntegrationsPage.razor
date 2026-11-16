@@ -1,0 +1,447 @@
+@page "/integrations"
+@page "/integrations/{PackId}"
+@rendermode InteractiveServer
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Integrations
+@using DreaminGeek.Siem.Web.Security
+@inject IntegrationService Integrations
+@inject PackCatalog Catalog
+@inject TenantAccess Access
+@inject NavigationManager Nav
+
+<PageTitle>Integrations · DG SIEM</PageTitle>
+
+<div class="dg-page-head">
+    <h1>Integrations</h1>
+    <p>Ready-made setups for the systems you run: how to send their data here, plus dashboards and alerts. Install a pack once, then turn it on for each tenant that uses it.</p>
+</div>
+
+<AdminOnly Access="_access">
+    @if (Catalog.Problems.Count > 0)
+    {
+        <section class="dg-panel mb-3">
+            <header><h2>Packs that couldn't be read</h2></header>
+            <div class="dg-body">
+                <ul class="small mb-2">
+                    @foreach (var p in Catalog.Problems)
+                    {
+                        <li><code>@p.Source</code>: @p.Message</li>
+                    }
+                </ul>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync">Read pack files again</button>
+            </div>
+        </section>
+    }
+
+    <div class="row g-3">
+        <div class="col-xl-4">
+            <section class="dg-panel">
+                <header>
+                    <h2>Packs</h2>
+                    <button class="btn btn-sm btn-link ms-auto p-0" title="Read the packs folder again after adding or changing a pack" @onclick="ReloadAsync">Reload</button>
+                </header>
+                <div class="dg-body p-0">
+                    @if (_packs is null)
+                    {
+                        <p class="dg-body small text-body-secondary mb-0">Loading…</p>
+                    }
+                    else if (_packs.Count == 0)
+                    {
+                        <p class="dg-body small mb-0">No packs found. Built-in packs ship with the server; put your own in <code>@Catalog.Folder</code>.</p>
+                    }
+                    else
+                    {
+                        @foreach (var group in _packs.GroupBy(p => p.Pack.Category).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <div class="dg-pack-group">@group.Key</div>
+                            <ul class="dg-pack-list">
+                                @foreach (var s in group)
+                                {
+                                    <li>
+                                        <a href="integrations/@s.Pack.Id" class="@(s.Pack.Id == PackId ? "active" : null)" aria-current="@(s.Pack.Id == PackId ? "page" : null)">
+                                            <span class="dg-pack-name">@s.Pack.Name</span>
+                                            <span class="dg-pack-state">
+                                                @if (!s.Installed)
+                                                {
+                                                    <span><span class="dg-dot dg-dot-off"></span>Not installed</span>
+                                                }
+                                                else
+                                                {
+                                                    <span><span class="dg-dot @(s.Tenants.Count > 0 ? "dg-dot-ok" : "dg-dot-off")"></span>@TenantText(s.Tenants)</span>
+                                                    @if (s.UpdateAvailable)
+                                                    {
+                                                        <span class="dg-pack-update">Update available</span>
+                                                    }
+                                                }
+                                            </span>
+                                            <span class="dg-pack-desc">@s.Pack.Description</span>
+                                        </a>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    }
+                </div>
+            </section>
+        </div>
+
+        <div class="col-xl-8">
+            @if (_detail is null)
+            {
+                <section class="dg-panel">
+                    <div class="dg-body small text-body-secondary">
+                        @(PackId is null ? "Choose a pack to see what it sets up." : _packs is null ? "Loading…" : $"There's no pack \"{PackId}\".")
+                    </div>
+                </section>
+            }
+            else
+            {
+                var pack = _detail.Summary.Pack;
+                <section class="dg-panel mb-3">
+                    <header>
+                        <h2>@pack.Name</h2>
+                        <span class="dg-aside">@pack.Category · version @pack.Version@(pack.BuiltIn ? "" : " · from the packs folder")</span>
+                    </header>
+                    <div class="dg-body">
+                        <p class="mb-2">@pack.Description</p>
+                        @if (!string.IsNullOrEmpty(pack.Docs))
+                        {
+                            <p class="small mb-2"><a href="@pack.Docs" target="_blank" rel="noopener noreferrer">@pack.Name documentation</a></p>
+                        }
+                        <div class="d-flex gap-2 align-items-center flex-wrap">
+                            @if (!_detail.Summary.Installed)
+                            {
+                                <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="InstallAsync">Install</button>
+                                <span class="small text-body-secondary">Adds @Count(pack.Dashboards.Count, "dashboard") and @Count(pack.Alerts.Count, "alert") (switched off). Nothing runs until you turn it on for a tenant.</span>
+                            }
+                            else
+                            {
+                                @if (_detail.Summary.UpdateAvailable)
+                                {
+                                    <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="InstallAsync">Update to version @pack.Version</button>
+                                }
+                                @if (_confirmRemove)
+                                {
+                                    <span class="small">Turn it off for every tenant and delete its dashboards and alerts? Ones you edited are kept as your own.</span>
+                                    <button class="btn btn-sm btn-danger" disabled="@_busy" @onclick="RemoveAsync">Remove</button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmRemove = false">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => _confirmRemove = true">Remove from server</button>
+                                }
+                            }
+                            <Status Value="@_outcome" />
+                        </div>
+                    </div>
+                </section>
+
+                <section class="dg-panel mb-3">
+                    <header>
+                        <h2>Tenants</h2>
+                        <span class="dg-aside">The pack's alerts run only for tenants it's on for</span>
+                    </header>
+                    <div class="dg-body">
+                        <div class="dg-pack-tenants mb-3" role="tablist" aria-label="Tenant">
+                            @foreach (var t in _detail.Tenants)
+                            {
+                                <button type="button" role="tab" aria-selected="@(t.Slug == _tenant)" class="@(t.Slug == _tenant ? "active" : null)" @onclick="() => SelectTenantAsync(t.Slug)">
+                                    <span class="dg-dot @(t.Enabled ? "dg-dot-ok" : "dg-dot-off")"></span>@t.Name
+                                </button>
+                            }
+                        </div>
+
+                        @if (_detail.Tenants.FirstOrDefault(t => t.Slug == _tenant) is { } tenant)
+                        {
+                            @if (!tenant.Enabled)
+                            {
+                                <p class="small mb-2">@pack.Name is off for @tenant.Name.</p>
+                                <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="EnableAsync">Turn on for @tenant.Name</button>
+                            }
+                            else
+                            {
+                                @if (_receiving is { } r)
+                                {
+                                    <p class="small mb-3">
+                                        <span class="dg-dot @(r.Receiving ? "dg-dot-ok" : "dg-dot-warn")"></span>@r.Message
+                                        <button class="btn btn-sm btn-link p-0 ms-2 align-baseline" disabled="@_busy" @onclick="CheckReceivingAsync">Check again</button>
+                                    </p>
+                                }
+
+                                @if (pack.Setup.Steps.Count > 0)
+                                {
+                                    <h3 class="dg-pack-h3">Setup</h3>
+                                    <ol class="dg-pack-steps">
+                                        @foreach (var step in pack.Setup.Steps)
+                                        {
+                                            <li>@((MarkupString)PackContent.StepHtml(step, Values(tenant)))</li>
+                                        }
+                                    </ol>
+                                }
+
+                                @if (PackContent.InputJson(pack, tenant.Token ?? "") is { } input)
+                                {
+                                    <h3 class="dg-pack-h3">Agent input</h3>
+                                    <pre class="dg-example">@Pretty(input)</pre>
+                                    @if (tenant.Agents.Count == 0)
+                                    {
+                                        <p class="small text-body-secondary">@tenant.Name has no agents yet. <a href="admin/agents">Add one</a>, then come back to add the input to it.</p>
+                                    }
+                                    else
+                                    {
+                                        <div class="d-flex gap-2 align-items-center flex-wrap mb-1">
+                                            <label class="small" for="pack-agent">Add to agent</label>
+                                            <select id="pack-agent" class="form-select form-select-sm w-auto" @bind="_agentId">
+                                                @foreach (var a in tenant.Agents)
+                                                {
+                                                    <option value="@a.Id">@a.Name@(a.Version is null ? "" : $" ({a.Version})")</option>
+                                                }
+                                            </select>
+                                            <button class="btn btn-sm btn-outline-primary" disabled="@_busy" @onclick="AddToAgentAsync">Add input</button>
+                                        </div>
+                                        <p class="small text-body-secondary">Replaces an input of the same type on the same port. The agent picks it up within a minute.</p>
+                                    }
+                                }
+
+                                <button class="btn btn-sm btn-outline-secondary mt-2" disabled="@_busy" @onclick="DisableAsync">Turn off for @tenant.Name</button>
+                                <span class="small text-body-secondary ms-2">Its alerts stop running for @tenant.Name. The agent input stays until you remove it.</span>
+                            }
+                        }
+                    </div>
+                </section>
+
+                <section class="dg-panel">
+                    <header>
+                        <h2>What it adds</h2>
+                        <span class="dg-aside">Shared by every tenant, like your other dashboards and alerts</span>
+                    </header>
+                    <div class="dg-body">
+                        @if (!_detail.Summary.Installed)
+                        {
+                            <ul class="dg-pack-items mb-0">
+                                @foreach (var d in pack.Dashboards)
+                                {
+                                    <li><span class="dg-pack-kind">Dashboard</span>@d.Name <span class="text-body-secondary">(@Count(d.Panels.Count, "panel"))</span></li>
+                                }
+                                @foreach (var a in pack.Alerts)
+                                {
+                                    <li><span class="dg-pack-kind">Alert</span>@a.Name</li>
+                                }
+                            </ul>
+                        }
+                        else
+                        {
+                            <ul class="dg-pack-items mb-2">
+                                @foreach (var item in _detail.Items)
+                                {
+                                    <li>
+                                        <span class="dg-pack-kind">@item.Kind</span>
+                                        <a href="@(item.Kind == "Dashboard" ? $"dashboards/{item.Id}" : $"alerts/{item.Id}")">@item.Name</a>
+                                        @if (item.Enabled is { } on)
+                                        {
+                                            <span class="text-body-secondary ms-1">· @(on ? "on" : "off")</span>
+                                        }
+                                        @if (item.Edited)
+                                        {
+                                            <span class="dg-pack-edited" title="Pack updates leave this one alone">edited</span>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                            <p class="small text-body-secondary mb-0">
+                                Alerts start switched off: open one to turn it on and choose who hears about it. Updates to the pack refresh the dashboards and alerts you haven't edited; edited ones stay as you left them.
+                            </p>
+                        }
+                    </div>
+                </section>
+            }
+        </div>
+    </div>
+</AdminOnly>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    [Parameter]
+    public string? PackId { get; set; }
+
+    private UserAccess? _access;
+    private IReadOnlyList<PackSummary>? _packs;
+    private PackDetail? _detail;
+    private string? _tenant;
+    private Guid _agentId;
+    private PackReceivingStatus? _receiving;
+    private Outcome? _outcome;
+    private bool _busy;
+    private bool _confirmRemove;
+    private string? _loadedFor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_access?.IsGlobalAdmin != true)
+        {
+            return;
+        }
+        if (_loadedFor != PackId || _packs is null)
+        {
+            _loadedFor = PackId;
+            _outcome = null;
+            _confirmRemove = false;
+            _tenant = null;
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _packs = await Integrations.ListAsync(_access!, CancellationToken.None);
+        if (PackId is null && _packs.Count > 0)
+        {
+            Nav.NavigateTo($"integrations/{_packs[0].Pack.Id}", replace: true);
+            return;
+        }
+        _detail = PackId is null ? null : await Integrations.GetAsync(_access!, PackId, CancellationToken.None);
+        if (_detail is not null)
+        {
+            // Stay on the chosen tenant; otherwise start with one the pack is on for.
+            _tenant ??= _detail.Tenants.FirstOrDefault(t => t.Enabled)?.Slug ?? _detail.Tenants.FirstOrDefault()?.Slug;
+            await TenantChangedAsync();
+        }
+    }
+
+    private async Task SelectTenantAsync(string slug)
+    {
+        _tenant = slug;
+        _outcome = null;
+        await TenantChangedAsync();
+    }
+
+    private async Task TenantChangedAsync()
+    {
+        var tenant = _detail?.Tenants.FirstOrDefault(t => t.Slug == _tenant);
+        if (tenant is { Agents.Count: > 0 } && tenant.Agents.All(a => a.Id != _agentId))
+        {
+            _agentId = tenant.Agents[0].Id;
+        }
+        _receiving = null;
+        if (tenant is { Enabled: true })
+        {
+            await CheckReceivingAsync();
+        }
+    }
+
+    private async Task CheckReceivingAsync()
+    {
+        if (_detail is null || _tenant is null)
+        {
+            return;
+        }
+        try
+        {
+            _receiving = await Integrations.ReceivingAsync(_access!, _detail.Summary.Pack.Id, _tenant, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _receiving = new PackReceivingStatus(false, "Couldn't check: " + ex.Message.Split('\n')[0]);
+        }
+    }
+
+    private Task InstallAsync() => RunAsync(async () =>
+    {
+        var updating = _detail!.Summary.Installed;
+        var report = await Integrations.InstallAsync(_access!, _detail.Summary.Pack.Id, CancellationToken.None);
+        return Describe(report, updating ? "Updated" : "Installed");
+    });
+
+    private Task RemoveAsync() => RunAsync(async () =>
+    {
+        var report = await Integrations.UninstallAsync(_access!, _detail!.Summary.Pack.Id, CancellationToken.None);
+        _confirmRemove = false;
+        return report.KeptEdited.Count == 0
+            ? "Removed."
+            : $"Removed. Kept your edited {string.Join(", ", report.KeptEdited.Select(n => $"\"{n}\""))}.";
+    });
+
+    private Task EnableAsync() => RunAsync(async () =>
+    {
+        await Integrations.EnableAsync(_access!, _detail!.Summary.Pack.Id, _tenant!, CancellationToken.None);
+        return $"On for {TenantName()}.";
+    });
+
+    private Task DisableAsync() => RunAsync(async () =>
+    {
+        await Integrations.DisableAsync(_access!, _detail!.Summary.Pack.Id, _tenant!, CancellationToken.None);
+        return $"Off for {TenantName()}.";
+    });
+
+    private Task AddToAgentAsync() => RunAsync(async () =>
+    {
+        await Integrations.AddInputToAgentAsync(_access!, _detail!.Summary.Pack.Id, _tenant!, _agentId, CancellationToken.None);
+        var agent = _detail.Tenants.First(t => t.Slug == _tenant).Agents.First(a => a.Id == _agentId).Name;
+        return $"Added to {agent}.";
+    });
+
+    private async Task RunAsync(Func<Task<string>> action)
+    {
+        _busy = true;
+        _outcome = null;
+        try
+        {
+            var message = await action();
+            await LoadAsync();
+            _outcome = new Outcome(true, message);
+        }
+        catch (AdminException ex)
+        {
+            _outcome = new Outcome(false, ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        Catalog.Reload();
+        _packs = null;
+        await LoadAsync();
+    }
+
+    private string TenantName() => _detail?.Tenants.FirstOrDefault(t => t.Slug == _tenant)?.Name ?? _tenant ?? "";
+
+    private Dictionary<string, string> Values(PackTenantView tenant) => new(StringComparer.Ordinal)
+    {
+        ["token"] = tenant.Token ?? "",
+        ["tenant"] = tenant.Slug,
+        ["port"] = PackContent.Port(_detail!.Summary.Pack),
+    };
+
+    private static string TenantText(IReadOnlyList<string> tenants) => tenants.Count switch
+    {
+        0 => "Installed, not on for any tenant",
+        <= 3 => "On for " + string.Join(", ", tenants),
+        _ => $"On for {tenants.Count} tenants",
+    };
+
+    private static string Pretty(string json) =>
+        System.Text.Json.Nodes.JsonNode.Parse(json)!.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+    private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
+
+    private static string Describe(PackSyncReport report, string verb)
+    {
+        var parts = new List<string>();
+        if (report.Created > 0) parts.Add($"{report.Created} added");
+        if (report.Updated > 0) parts.Add($"{report.Updated} updated");
+        if (report.Removed > 0) parts.Add($"{report.Removed} removed");
+        var text = parts.Count == 0 ? $"{verb}; nothing needed changing." : $"{verb}: {string.Join(", ", parts)}.";
+        return report.KeptEdited.Count == 0 ? text : $"{text} Left your edited {string.Join(", ", report.KeptEdited.Select(n => $"\"{n}\""))} alone.";
+    }
+}

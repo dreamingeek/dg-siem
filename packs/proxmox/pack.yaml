@@ -1,0 +1,106 @@
+# Proxmox VE: node, guest and storage metrics from Proxmox's built-in Metric Server (InfluxDB over HTTP).
+# Format: docs/integrations.md
+id: proxmox
+name: Proxmox VE
+version: 1
+category: Virtualization
+description: CPU, memory, network and storage for Proxmox nodes, VMs and containers, sent by Proxmox's Metric Server.
+docs: https://pve.proxmox.com/wiki/External_Metric_Server
+
+setup:
+  input:
+    type: InfluxDb
+    port: 8086
+    job: proxmox
+    tokens: ["{{token}}"]
+  steps:
+    - Add the input below to an agent the Proxmox nodes can reach (agent 0.7.0 or later), with **Add to agent** or in the agent's config.
+    - In Proxmox, open **Datacenter → Metric Server → Add → InfluxDB**.
+    - "Name: `dg-siem`. Server: the agent's address. Port: {{port}}. Protocol: **HTTP**."
+    - "Organization and Bucket: `proxmox` (any value works). Token: {{token}}"
+    - Every node sends its own, its guests' and its storages' figures every 10 seconds; they show up here within a minute.
+
+receiving:
+  search: '| mstats count(cpustat_cpu) as samples | where samples > 0'
+  within: 15m
+
+dashboards:
+  - key: overview
+    name: Proxmox overview
+    description: Nodes, guests and storage reported by Proxmox's Metric Server.
+    timeRange: -4h
+    panels:
+      - title: Nodes reporting
+        kind: stat
+        search: '| mstats latest(system_uptime) as up where object="nodes" by host | stats count() as nodes'
+      - title: VMs running
+        kind: stat
+        search: '| mstats latest(system_uptime) as up where object="qemu" by vmid | where up > 0 | stats count() as vms'
+      - title: Containers running
+        kind: stat
+        search: '| mstats latest(system_uptime) as up where object="lxc" by vmid | where up > 0 | stats count() as containers'
+      - title: Busiest node CPU
+        kind: stat
+        unit: percent
+        search: '| mstats avg(cpustat_cpu) as cpu where object="nodes" by host | eval cpu = cpu * 100 | stats max(cpu)'
+      - title: Node CPU (1 = all cores busy)
+        kind: timeline
+        w: 6
+        search: '| mstats avg(cpustat_cpu) where object="nodes" by host span=5m'
+      - title: Node memory used
+        kind: timeline
+        unit: bytes
+        w: 6
+        search: '| mstats avg(memory_memused) where object="nodes" by host span=5m'
+      - title: Node network out (bytes/s)
+        kind: timeline
+        unit: bytes
+        w: 6
+        search: '| mstats rate(nics_transmit) where object="nodes" by host span=5m'
+      - title: Node network in (bytes/s)
+        kind: timeline
+        unit: bytes
+        w: 6
+        search: '| mstats rate(nics_receive) where object="nodes" by host span=5m'
+      - title: Busiest guests
+        kind: table
+        w: 6
+        h: 5
+        search: '| mstats avg(system_cpu) as cpu, latest(system_mem) as mem, latest(system_maxmem) as maxmem where object!="nodes" object!="storages" by host, object, nodename | eval cpu_pct = round(cpu * 100, 1), mem_gb = round(mem / 1073741824, 1), max_gb = round(maxmem / 1073741824, 1) | sort -cpu_pct | head 15 | table host, object, nodename, cpu_pct, mem_gb, max_gb'
+      - title: Storage
+        kind: table
+        w: 6
+        h: 5
+        search: '| mstats latest(system_used) as used, latest(system_total) as total where object="storages" by host, nodename | where total > 0 | eval used_pct = round(used / total * 100, 1), used_gb = round(used / 1073741824), total_gb = round(total / 1073741824) | sort -used_pct | table host, nodename, used_pct, used_gb, total_gb'
+
+alerts:
+  - key: stopped
+    name: Proxmox stopped sending metrics
+    description: No Proxmox metrics for 15 minutes. Check the Metric Server entry in Proxmox, and the agent that receives them.
+    search: '| mstats count(cpustat_cpu) as samples | where samples > 0'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    condition: below
+    threshold: 1
+    severity: high
+    suppressMinutes: 240
+  - key: node-cpu
+    name: Proxmox node CPU high
+    description: A node averaged over 90% CPU for 15 minutes.
+    search: '| mstats avg(cpustat_cpu) as cpu where object="nodes" by host | where cpu > 0.9'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: host
+    suppressMinutes: 120
+  - key: storage-full
+    name: Proxmox storage almost full
+    description: A storage is over 90% used.
+    search: '| mstats latest(system_used) as used, latest(system_total) as total where object="storages" by host, nodename | where total > 0 | eval used_pct = used / total * 100 | where used_pct > 90'
+    timeRange: 30m
+    schedule: '*/15 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: host
+    suppressMinutes: 720
