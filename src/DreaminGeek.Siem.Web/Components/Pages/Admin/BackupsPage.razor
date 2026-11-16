@@ -16,7 +16,7 @@
     <p>Nightly copies of the server's configuration and the events, kept in the backup folder on the server's host.</p>
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="!_loaded">
     @foreach (var problem in _problems)
     {
         <div class="alert alert-warning small" role="alert">@problem</div>
@@ -182,6 +182,7 @@
     }
 
     private UserAccess? _access;
+    private bool _loaded;
     private SettingsForm _settings = new();
     private TimeOnly _time = new(3, 15);
     private BackupState _state = BackupState.Empty;
@@ -200,12 +201,19 @@
         {
             return;
         }
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
+            return;
+        }
         var saved = await Backups.GetSettingsAsync(CancellationToken.None);
         _settings = new SettingsForm { Enabled = saved.Enabled, KeepDays = saved.KeepDays, IncludeEvents = saved.IncludeEvents, FullEveryDays = saved.FullEveryDays };
         _time = TimeOnly.ParseExact(saved.Time, "HH:mm", CultureInfo.InvariantCulture);
         _zoneInfo = (await Settings.GetGeneralAsync(CancellationToken.None)).Zone;
         _zone = _zoneInfo.Id;
         await RefreshAsync();
+        _loaded = true;
     }
 
     private BackupSettings Build() => new(_settings.Enabled, _time.ToString("HH:mm", CultureInfo.InvariantCulture), _settings.KeepDays, _settings.IncludeEvents, _settings.FullEveryDays);

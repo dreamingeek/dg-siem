@@ -442,3 +442,7 @@ fieldset legend.form-label { float: none; font-size: 0.8125rem; }
 .dg-pack-items li:last-child { border-bottom: 0; }
 .dg-pack-kind { display: inline-block; min-width: 5.5rem; color: var(--dg-muted); font-size: 0.75rem; }
 .dg-pack-edited { margin-left: 0.5rem; padding: 0 0.375rem; border: 1px solid var(--dg-rule); border-radius: var(--bs-border-radius-sm); color: var(--dg-muted); font-size: 0.6875rem; }
+
+/* Page loading: shown while a page fetches its data. Slow pages skip their load while prerendering, so this shows at once. */
+.dg-loading { display: flex; flex-direction: column; gap: 0.5rem; max-width: 20rem; padding: 2rem 0; color: var(--dg-muted); font-size: 0.8125rem; }
+.dg-loading .dg-loading-bar { width: 100%; }

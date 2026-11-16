@@ -1,9 +1,9 @@
 @using DreaminGeek.Siem.Web.Security
 @* Renders its content only for global admins. The admin service re-checks on every action. *@
 
-@if (Access is null)
+@if (Access is null || (Access.IsGlobalAdmin && Loading))
 {
-    <p class="text-body-secondary">Loading…</p>
+    <Loading />
 }
 else if (!Access.IsGlobalAdmin)
 {
@@ -16,5 +16,9 @@ else
 
 @code {
     [Parameter] public UserAccess? Access { get; set; }
+
+    /// <summary>True while the page loads its data: shows a loading bar instead of the content.</summary>
+    [Parameter] public bool Loading { get; set; }
+
     [Parameter] public RenderFragment? ChildContent { get; set; }
 }

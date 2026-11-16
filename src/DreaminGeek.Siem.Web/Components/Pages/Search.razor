@@ -133,6 +133,11 @@ else if (_access is not null)
         </div>
     }
 
+    @if (_running && _result is null)
+    {
+        <Loading Text="Searching…" />
+    }
+
     @if (_result is { } r)
     {
         <div class="row g-3">
@@ -453,6 +458,12 @@ else if (_access is not null)
         var key = Key(_query, _range + FromParam + ToParam, _tenant);
         if (Q is not null && key != _lastKey)
         {
+            if (!RendererInfo.IsInteractive)
+            {
+                // Prerendering: show the page now and search once it's live (instead of searching twice).
+                _running = true;
+                return;
+            }
             _lastKey = key;
             await RunAsync();
         }

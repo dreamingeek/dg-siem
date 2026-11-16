@@ -82,7 +82,7 @@ else
                     }
                     @if (_loading && _tenants.Count == 0)
                     {
-                        <tr><td colspan="5" class="text-body-secondary">Loading…</td></tr>
+                        <tr><td colspan="5"><Loading /></td></tr>
                     }
                 </tbody>
             </table>
@@ -186,6 +186,11 @@ else
             return;
         }
         _isAdmin = _access.IsGlobalAdmin;
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bars now and run the searches once it's live.
+            return;
+        }
         var tenants = _access.Tenants;
         var now = DateTimeOffset.UtcNow;
         var from = SearchService.ParseTime(_range, now, now.AddHours(-24));

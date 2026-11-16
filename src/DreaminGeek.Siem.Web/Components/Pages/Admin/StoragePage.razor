@@ -19,7 +19,7 @@
     <p>How long events are kept, where they're stored, and what each source costs.</p>
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="!_loaded">
     @if (_error is not null)
     {
         <div class="alert alert-danger small" role="alert">@_error</div>
@@ -277,6 +277,7 @@
     }
 
     private UserAccess? _access;
+    private bool _loaded;
     private List<RuleRow> _rules = [];
     private int _defaultDays = 120;
     private bool _coldEnabled;
@@ -301,8 +302,15 @@
         {
             return;
         }
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
+            return;
+        }
         Load(Retention.Current);
         await RefreshAsync();
+        _loaded = true;
     }
 
     private void Load(RetentionSettings settings)
