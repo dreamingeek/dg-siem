@@ -48,7 +48,7 @@ public sealed class SecurityAlertTests
     public void Names_are_unique_and_every_group_is_covered()
     {
         Assert.Equal(SecurityAlerts.All.Count, SecurityAlerts.All.Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal([SecurityAlerts.ThreatIntel, SecurityAlerts.Health, SecurityAlerts.Windows, SecurityAlerts.Defender, SecurityAlerts.Pbx, SecurityAlerts.Identity], SecurityAlerts.All.Select(t => t.Group).Distinct());
+        Assert.Equal([SecurityAlerts.ThreatIntel, SecurityAlerts.Health, SecurityAlerts.Pipeline], SecurityAlerts.All.Select(t => t.Group).Distinct());
         Assert.Null(SecurityAlerts.ToForm(SecurityAlerts.All[0], " ").EmailTo);
     }
 }

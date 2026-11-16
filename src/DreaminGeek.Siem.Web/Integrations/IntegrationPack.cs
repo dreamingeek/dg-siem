@@ -84,6 +84,9 @@ public sealed class PackPanel
     /// <summary>Width on the 12-column grid; panels flow left to right, top to bottom.</summary>
     public int? W { get; set; }
     public int? H { get; set; }
+    /// <summary>Optional fixed position (column 0-11, row); give both, or leave both out to flow.</summary>
+    public int? X { get; set; }
+    public int? Y { get; set; }
 }
 
 public sealed class PackAlert
@@ -210,35 +213,59 @@ public static partial class PackContent
             var (dw, dh) = DashboardPanel.DefaultSize(kind);
             var w = Math.Clamp(p.W ?? dw, 1, 12);
             var h = Math.Clamp(p.H ?? dh, 1, 12);
+            if (p.X is { } fixedX && p.Y is { } fixedY)
+            {
+                panels.Add(Panel(dashboard.Key, i, p, kind, Math.Clamp(fixedX, 0, 12 - w), Math.Max(0, fixedY), w, h));
+                continue;
+            }
             if (x + w > 12)
             {
                 x = 0;
                 y += rowHeight;
                 rowHeight = 0;
             }
-            panels.Add(new DashboardPanel
-            {
-                // Stable ids, so the same pack version always produces the same layout (and hash).
-                Id = $"{dashboard.Key}-{i}",
-                Title = p.Title.Trim(),
-                Query = p.Search.Trim(),
-                Kind = kind,
-                Unit = Unit(p.Unit),
-                X = x,
-                Y = y,
-                W = w,
-                H = h,
-            });
+            panels.Add(Panel(dashboard.Key, i, p, kind, x, y, w, h));
             x += w;
             rowHeight = Math.Max(rowHeight, h);
         }
         return panels;
     }
 
-    /// <summary>Fingerprint of what a pack wrote into a dashboard, to tell later whether someone edited it.</summary>
-    public static string Hash(Dashboard d) =>
+    private static DashboardPanel Panel(string key, int i, PackPanel p, PanelKind kind, int x, int y, int w, int h) =>
+        new()
+        {
+            Id = $"{key}-{i}",
+            Title = p.Title.Trim(),
+            Query = p.Search.Trim(),
+            Kind = kind,
+            Unit = Unit(p.Unit),
+            X = x,
+            Y = y,
+            W = w,
+            H = h,
+        };
+
+    /// <summary>
+    /// Fingerprint of what a pack wrote into a dashboard, to tell later whether someone edited it. Panel ids are
+    /// internal (a dashboard made by hand has random ones), so they don't count.
+    /// </summary>
+    public static string Hash(Dashboard d)
+    {
         // Re-serialized: Postgres stores the layout as jsonb, which doesn't keep the text as written.
+        var panels = PanelJson.Deserialize(d.LayoutJson);
+        panels.ForEach(p => p.Id = string.Empty);
+        return Sha(string.Join('\u001f', d.Name, d.Description ?? "", d.TimeRange, PanelJson.Serialize(panels)));
+    }
+
+    /// <summary>The fingerprint as the first version (0.7.0) computed it, with panel ids.</summary>
+    private static string HashWithIds(Dashboard d) =>
         Sha(string.Join('\u001f', d.Name, d.Description ?? "", d.TimeRange, PanelJson.Serialize(PanelJson.Deserialize(d.LayoutJson))));
+
+    /// <summary>Whether the dashboard is still as its pack wrote it.</summary>
+    public static bool Untouched(Dashboard d) => d.PackHash is { } h && (h == Hash(d) || h == HashWithIds(d));
+
+    /// <summary>Whether the alert rule is still as its pack wrote it.</summary>
+    public static bool Untouched(AlertRule r) => r.PackHash is { } h && h == Hash(r);
 
     /// <summary>
     /// Fingerprint of an alert rule's definition. Whether it's on, and who it emails or tickets, are the user's

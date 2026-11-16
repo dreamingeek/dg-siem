@@ -1,5 +1,7 @@
 # Windows
 
+The **Windows** [integration pack](integrations.md) (**Integrations**) has these setup steps, a dashboard and the alerts.
+
 The agent runs on Windows as the `dg-siem-agent` service and reads the event logs. It's the same agent as on Linux (a single native `dg-siem-agent.exe`), so it can also tail files, listen for syslog or run a HEC input.
 
 ## Install

@@ -198,6 +198,10 @@ public sealed partial class PackCatalog(IOptions<PackOptions> options, IQueryPar
                 }
                 Search($"panel \"{p.Title}\"", p.Search, placeholders: false);
                 PackContent.Kind(p.Kind ?? string.Empty);
+                if ((p.X is null) != (p.Y is null) || p.X is < 0 or > 11 || p.Y is < 0)
+                {
+                    throw new PackException($"{pack.Id}: dashboard {d.Key}: panel \"{p.Title}\" needs both x (0-11) and y, or neither.");
+                }
                 PackContent.Unit(p.Unit ?? string.Empty);
             }
         }

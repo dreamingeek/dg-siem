@@ -1,0 +1,148 @@
+# Windows: sign-ins, account and group changes, services, cleared logs and Defender, from the Windows agent.
+# Format: docs/integrations.md
+id: windows
+name: Windows
+version: 1
+category: Endpoints
+description: Sign-ins and failures, lockouts, account and privileged-group changes, new services, cleared logs, and Microsoft Defender detections, read from the event logs by the Windows agent.
+
+setup:
+  steps:
+    - "Once: upload the Windows agent package (`dg-siem-agent-…-win-x64.zip`) on **Administration → Agent updates**."
+    - On **Administration → Agents**, choose **Enroll an agent** for this tenant and copy the Windows command.
+    - Run it in an Administrator PowerShell on each server or workstation (or from your RMM as SYSTEM). The agent reads the Security, System, Application, Defender, PowerShell and Sysmon logs by default; nothing else to set up.
+    - "Sign-in events need logon auditing: check that **Audit Logon** (success and failure) is on in the audit policy (Group Policy: **Advanced Audit Policy Configuration → Logon/Logoff**)."
+
+receiving:
+  search: 'dataset=windows.* | stats count() as events | where events > 0'
+  within: 1h
+
+dashboards:
+  - key: security
+    name: Windows security
+    description: Sign-ins, failures, lockouts and Defender detections across Windows machines.
+    timeRange: -24h
+    panels:
+      - { title: Failed sign-ins, kind: stat, search: 'dataset=windows.security action=logon-failed | stats count()' }
+      - { title: Lockouts, kind: stat, search: 'dataset=windows.security action=locked-out-user-account | stats count()' }
+      - { title: Remote Desktop sign-ins, kind: stat, search: 'dataset=windows.security action=logged-in winlog.logon.type=RemoteInteractive | stats count()' }
+      - { title: Defender detections, kind: stat, search: 'dataset=windows.defender action IN (malware-detected, suspicious-behavior-detected) | stats count()' }
+      - { title: Failed sign-ins by machine, kind: timebars, w: 8, search: 'dataset=windows.security action=logon-failed | timechart count() by host' }
+      - { title: Accounts failing most, kind: bars, search: 'dataset=windows.security action=logon-failed | top limit=10 user' }
+      - { title: Failed sign-ins by source, kind: table, w: 6, h: 5, search: 'dataset=windows.security action=logon-failed | stats count() as failures, dc(user) as accounts by src, country, host | sort -failures | head 20' }
+      - { title: Remote Desktop sign-ins, kind: table, w: 6, h: 5, search: 'dataset=windows.security action=logged-in winlog.logon.type=RemoteInteractive | stats count() as signins, latest(src) as last_from by user, host | sort -signins | head 20' }
+      - { title: Defender detections, kind: table, w: 12, search: 'dataset=windows.defender action IN (malware-detected, suspicious-behavior-detected, malware-action-failed) | stats count() as events, latest(defender.action) as last_action by host, threat.name | sort -events | head 20' }
+
+alerts:
+
+  - key: repeated-failed-sign-ins-from-one-source
+    name: 'Windows: repeated failed sign-ins from one source'
+    description: '20 or more failed sign-ins, or 5 or more different accounts tried, from one address in 15 minutes: password guessing or spraying.'
+    search: 'dataset=windows.security action=logon-failed src=* | stats count() as tries, dc(user) as accounts, dc(host) as hosts by src, country | where tries >= 20 OR accounts >= 5'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'source.ip'
+    suppressMinutes: 60
+  - key: account-locked-out
+    name: 'Windows: account locked out'
+    description: 'An account was locked out after too many bad passwords. from_computer is where the attempts came from.'
+    search: 'dataset=windows.security action=locked-out-user-account | stats count() as lockouts, latest(source.domain) as from_computer by user, host'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'user.name'
+    suppressMinutes: 60
+  - key: added-to-a-privileged-group
+    name: 'Windows: added to a privileged group'
+    description: 'Someone was added to Administrators, Domain/Enterprise/Schema Admins, Account or Backup Operators, Remote Desktop Users or DnsAdmins.'
+    search: 'dataset=windows.security action=added-member-to-group group.name IN ("Administrators", "Domain Admins", "Enterprise Admins", "Schema Admins", "Account Operators", "Backup Operators", "Remote Desktop Users", "DnsAdmins") | table @timestamp, host, user, user.target.name, group.name'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'host.name,user.target.name,group.name'
+    suppressMinutes: 60
+  - key: new-user-account
+    name: 'Windows: new user account'
+    description: 'A local or domain account was created. user is who created it, user.target.name the new account.'
+    search: 'dataset=windows.security action=added-user-account | table @timestamp, host, user, user.target.name'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'host.name,user.target.name'
+    suppressMinutes: 60
+  - key: security-or-event-log-cleared
+    name: 'Windows: security or event log cleared'
+    description: 'The Security log (1102) or another event log (104) was cleared: a common step to hide what happened.'
+    search: 'dataset=windows.* action IN (audit-log-cleared, log-cleared) | table @timestamp, host, user, winlog.channel'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: critical
+    suppressBy: 'host.name,winlog.channel'
+    suppressMinutes: 60
+  - key: remote-desktop-sign-in-from-the-internet
+    name: 'Windows: remote desktop sign-in from the internet'
+    description: 'A successful Remote Desktop sign-in from a public address. Expected ones (a VPN''s public IP) can be excluded in the search.'
+    search: 'dataset=windows.security action=logged-in winlog.logon.type=RemoteInteractive src=* NOT src=10.0.0.0/8 NOT src=172.16.0.0/12 NOT src=192.168.0.0/16 NOT src=100.64.0.0/10 NOT src=127.0.0.0/8 NOT src=169.254.0.0/16 NOT src=::1 NOT src=fe80::/10 NOT src=fc00::/7 | stats count() as signins by user, src, country, host'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'user.name,source.ip'
+    suppressMinutes: 720
+  - key: new-service-installed
+    name: 'Windows: new service installed'
+    description: 'A service was installed (7045/4697). Software updates do this too; PsExec, remote-access tools and odd paths are what to look for.'
+    search: 'dataset=windows.* action=service-installed | table @timestamp, host, user, service.name, process.executable'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'host.name,service.name'
+    suppressMinutes: 1440
+
+  - key: malware-detected
+    name: 'Defender: malware detected'
+    description: 'Microsoft Defender detected malware or suspicious behaviour. defender.action shows what it did (quarantine, remove...).'
+    search: 'dataset=windows.defender action IN (malware-detected, suspicious-behavior-detected) | table @timestamp, host, user, action, threat.name, defender.severity, file.path, defender.action'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: high
+    suppressBy: 'host.name,threat.name'
+    suppressMinutes: 60
+  - key: couldn-t-remove-malware
+    name: 'Defender: couldn''t remove malware'
+    description: 'Defender detected a threat but its action failed: the malware may still be active.'
+    search: 'dataset=windows.defender action=malware-action-failed | table @timestamp, host, user, threat.name, file.path, defender.error'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: critical
+    suppressBy: 'host.name,threat.name'
+    suppressMinutes: 60
+  - key: protection-turned-off
+    name: 'Defender: protection turned off'
+    description: 'Real-time, virus or spyware protection was disabled, or tamper protection blocked an attempt to change it.'
+    search: 'dataset=windows.defender action IN (real-time-protection-disabled, virus-scanning-disabled, spyware-scanning-disabled, tamper-protection-blocked-change) | table @timestamp, host, user, action'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: critical
+    suppressBy: 'host.name,event.action'
+    suppressMinutes: 60
+  - key: signature-updates-failing
+    name: 'Defender: signature updates failing'
+    description: 'Defender couldn''t update its signatures in the last 4 hours.'
+    search: 'dataset=windows.defender action=signature-update-failed | stats count() as failures, latest(defender.error) as error by host'
+    timeRange: 4h
+    schedule: '0 */4 * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'host.name'
+    suppressMinutes: 1440

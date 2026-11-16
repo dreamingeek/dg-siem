@@ -148,7 +148,7 @@ public sealed class IntegrationPackTests : IDisposable
         var name = Guid.NewGuid().ToString();
         await using (var db = Db(name))
         {
-            db.Dashboards.Add(new Dashboard { Id = Guid.NewGuid(), Name = "Demo dashboard" }); // someone else's, same name
+            db.Dashboards.Add(new Dashboard { Id = Guid.NewGuid(), Name = "Demo dashboard", PackId = "other" }); // another pack's, same name
             await db.SaveChangesAsync();
             var report = await IntegrationService.SyncAsync(db, Pack(Minimal), Guid.NewGuid(), CancellationToken.None);
             Assert.Equal(3, report.Created);
@@ -241,5 +241,86 @@ public sealed class IntegrationPackTests : IDisposable
         Assert.Equal(["acme"], await For(new AlertRule { Name = "pack", Query = "x", PackId = "proxmox" }));
         Assert.Empty(await For(new AlertRule { Name = "pack, narrowed", Query = "x", PackId = "proxmox", TenantId = globex.Id }));
         Assert.Empty(await For(new AlertRule { Name = "other pack", Query = "x", PackId = "unifi" }));
+    }
+
+    [Fact]
+    public void Built_in_packs_load_and_their_alerts_suppress_by_result_columns()
+    {
+        var catalog = Catalog();
+        Assert.Empty(catalog.Problems);
+        Assert.Equal(["authentik", "crowdsec", "pangolin", "pbx", "proxmox", "unifi", "windows"], catalog.Packs.Select(p => p.Id).Order(StringComparer.Ordinal));
+        var now = DateTimeOffset.UtcNow;
+        foreach (var alert in catalog.Packs.SelectMany(p => p.Alerts))
+        {
+            var compiled = new ClickHouseCompiler("dgsiem").Compile(new PipeParser().Parse(alert.Search),
+                new QueryRequest(alert.Search, now.AddHours(-1), now, ["dg"]));
+            Assert.Contains("tenant_id IN", compiled.Sql, StringComparison.Ordinal);
+            // Repeats are recognised by these fields, so they must be columns of the result.
+            foreach (var key in (alert.SuppressBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                Assert.True(compiled.Columns.Contains(key), $"{alert.Name}: suppressBy {key} isn't one of {string.Join(", ", compiled.Columns)}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Installing_adopts_dashboards_and_alerts_of_yours_with_the_same_names()
+    {
+        var pack = Pack(Minimal);
+        await using var db = Db(Guid.NewGuid().ToString());
+        // As added from the old ready-made lists: same definition, random panel ids, switched on with a recipient.
+        var mine = new Dashboard { Id = Guid.NewGuid(), Name = "Demo dashboard", Description = "x", TimeRange = "-24h" };
+        var panels = PackContent.Panels(pack.Dashboards[0]);
+        panels.ForEach(p => p.Id = Guid.NewGuid().ToString("N")[..10]);
+        mine.LayoutJson = PanelJson.Serialize(panels);
+        mine.Description = null;
+        var quiet = new AlertRule
+        {
+            Id = Guid.NewGuid(), Name = "Demo went quiet", Query = pack.Alerts[0].Search, TimeRange = "-15m", Schedule = "*/5 * * * *",
+            Condition = AlertCondition.CountLessThan, Threshold = 1, Severity = AlertSeverity.High, Enabled = true, EmailTo = "ops@example.com",
+            SuppressFor = TimeSpan.FromMinutes(60),
+        };
+        var busy = new AlertRule { Id = Guid.NewGuid(), Name = "Demo busy", Query = "dataset=demo | stats count()", Enabled = true };
+        db.Dashboards.Add(mine);
+        db.AlertRules.AddRange(quiet, busy);
+        await db.SaveChangesAsync();
+
+        var report = await IntegrationService.SyncAsync(db, pack, Guid.Empty, CancellationToken.None);
+        Assert.Equal(0, report.Created);
+        Assert.Equal(["Demo dashboard", "Demo went quiet", "Demo busy"], report.Adopted);
+        Assert.Equal(3, await db.Dashboards.CountAsync() + await db.AlertRules.CountAsync());
+
+        Assert.True(PackContent.Untouched(await db.Dashboards.SingleAsync()));      // same as the pack's
+        var adoptedQuiet = await db.AlertRules.SingleAsync(a => a.Name == "Demo went quiet");
+        Assert.True(PackContent.Untouched(adoptedQuiet));
+        Assert.True(adoptedQuiet.Enabled);
+        Assert.Equal("ops@example.com", adoptedQuiet.EmailTo);
+        Assert.False(PackContent.Untouched(await db.AlertRules.SingleAsync(a => a.Name == "Demo busy"))); // differs: kept as edited
+
+        var again = await IntegrationService.SyncAsync(db, pack, Guid.Empty, CancellationToken.None);
+        Assert.Equal((0, 0, 0), (again.Created, again.Updated, again.Removed));
+        Assert.Equal(["Demo busy"], again.KeptEdited);
+        Assert.Empty(again.Adopted!);
+    }
+
+    [Fact]
+    public void Dashboards_written_by_the_first_version_still_count_as_untouched()
+    {
+        // 0.7.0 fingerprinted the layout with its panel ids.
+        var d = new Dashboard { Name = "Demo dashboard", TimeRange = "-24h", LayoutJson = PanelJson.Serialize(PackContent.Panels(Pack(Minimal).Dashboards[0])) };
+        d.PackHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            string.Join('\u001f', d.Name, "", d.TimeRange, PanelJson.Serialize(PanelJson.Deserialize(d.LayoutJson))))))[..32];
+        Assert.True(PackContent.Untouched(d));
+        d.TimeRange = "-7d";
+        Assert.False(PackContent.Untouched(d));
+    }
+
+    [Fact]
+    public void Panels_with_a_position_keep_it()
+    {
+        var pack = Pack(Minimal.Replace("{ title: Top, kind: bars,", "{ title: Top, kind: bars, x: 8, y: 20,", StringComparison.Ordinal));
+        var top = PackContent.Panels(pack.Dashboards[0]).Single(p => p.Title == "Top");
+        Assert.Equal((8, 20), (top.X, top.Y));
+        Assert.Throws<PackException>(() => Pack(Minimal.Replace("{ title: Top, kind: bars,", "{ title: Top, kind: bars, x: 3,", StringComparison.Ordinal)));
     }
 }

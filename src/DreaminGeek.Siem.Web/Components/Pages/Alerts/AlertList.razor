@@ -41,9 +41,11 @@
             <header><h2>Add ready-made alerts</h2></header>
             <div class="dg-body">
                 <p class="small">
-                    Ready-made alerts for Windows, Defender, the phone systems and authentik. Each runs for every tenant separately,
+                    Ready-made alerts for the pipeline itself@(_templates.Any(t => t.Group == SecurityAlerts.ThreatIntel) ? " and threat intel" : ""). Each runs for every tenant separately,
                     emails <strong>@(_email ?? "nobody (your login has no email address)")</strong>, and opens an AlgaPSA ticket when it's High or Critical.
                     They start switched on; edit, test or turn any of them off afterwards.
+                    Alerts for Windows, Defender, the phone systems, authentik, UniFi and the other sources now come with their
+                    <a href="integrations">integration packs</a>.
                 </p>
                 @foreach (var group in _templates.GroupBy(t => t.Group))
                 {

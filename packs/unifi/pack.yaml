@@ -1,0 +1,75 @@
+# UniFi: gateway, firewall and console events sent by UniFi Network's SIEM Server (syslog/CEF).
+# Format: docs/integrations.md
+id: unifi
+name: UniFi
+version: 1
+category: Network
+description: Firewall blocks, admin sign-ins, VPN, Wi-Fi and system events from UniFi gateways and consoles, sent as syslog.
+docs: https://help.ui.com/hc/en-us/articles/33349041044119
+
+setup:
+  input:
+    type: SyslogUdp
+    port: 514
+  steps:
+    - Every agent listens for syslog on UDP 514 already; **Add to agent** checks the one you pick does. The gateway must be able to reach it (allow UDP 514 through any firewall on the way).
+    - In UniFi Network, open **Settings → Control Plane → Integrations**.
+    - "Next to **Activity Logging (Syslog)**, choose **SIEM Server**. Server Address: the agent's address. Port: {{port}}. Apply."
+    - For firewall blocks, turn on **Syslog Logging** on the firewall rules (policies) you want logged, at least your block rules.
+    - "Older gateways that only send iptables-style kernel lines: add a source hint for the gateway's address with `dataset: unifi` in the agent's config."
+
+receiving:
+  search: 'dataset=unifi* | stats count() as events | where events > 0'
+  within: 1h
+
+dashboards:
+
+  - key: unifi-firewall
+    name: 'UniFi firewall'
+    description: 'Firewall blocks per tenant, rule, source and port.'
+    timeRange: '-24h'
+    panels:
+      - { title: 'Blocked', kind: stat, x: 0, y: 0, w: 3, h: 2,
+          search: 'dataset=unifi.firewall action=blocked | stats count()' }
+      - { title: 'Blocked sources', kind: stat, x: 3, y: 0, w: 3, h: 2,
+          search: 'dataset=unifi.firewall action=blocked | stats dc(src)' }
+      - { title: 'Firewall events', kind: stat, x: 6, y: 0, w: 3, h: 2,
+          search: 'dataset=unifi.firewall | stats count()' }
+      - { title: 'UniFi events', kind: stat, x: 9, y: 0, w: 3, h: 2,
+          search: 'dataset=unifi* | stats count()' }
+      - { title: 'Blocks by tenant', kind: timebars, x: 0, y: 2, w: 8, h: 4,
+          search: 'dataset=unifi.firewall action=blocked | timechart count() by tenant' }
+      - { title: 'Top rules', kind: bars, x: 8, y: 2, w: 4, h: 4,
+          search: 'dataset=unifi.firewall | top limit=10 rule.name' }
+      - { title: 'Top blocked sources', kind: bars, x: 0, y: 6, w: 4, h: 4,
+          search: 'dataset=unifi.firewall action=blocked | top limit=10 src' }
+      - { title: 'Blocked destination ports', kind: table, x: 4, y: 6, w: 4, h: 4,
+          search: 'dataset=unifi.firewall action=blocked | stats count() by dport, proto | sort -count | head 15' }
+      - { title: 'UniFi events by dataset', kind: timeline, x: 8, y: 6, w: 4, h: 4,
+          search: 'dataset=unifi* | timechart count() by dataset' }
+      - { title: 'Blocked by country', kind: map, x: 0, y: 10, w: 6, h: 5,
+          search: 'dataset=unifi.firewall action=blocked | stats count() by country' }
+      - { title: 'Top blocked networks', kind: bars, x: 6, y: 10, w: 6, h: 5,
+          search: 'dataset=unifi.firewall action=blocked | top limit=10 org' }
+
+alerts:
+  - key: admin-signed-in
+    name: 'UniFi: someone signed in to UniFi OS'
+    description: 'An administrator signed in to the UniFi console. Expected when you do; worth a look when you didn''t.'
+    search: 'dataset=unifi.os action=admin_accessed_unifi_os | table @timestamp, host, user, src, country, message'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'user.name,source.ip'
+    suppressMinutes: 240
+  - key: firewall-hammered
+    name: 'UniFi: one source hammering the firewall'
+    description: '500 or more blocked connections from one address in 15 minutes: a scan or an attack aimed at you specifically.'
+    search: 'dataset=unifi.firewall action=blocked | stats count() as blocks, dc(dport) as ports by src, country, org, host | where blocks >= 500'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: 'source.ip'
+    suppressMinutes: 360

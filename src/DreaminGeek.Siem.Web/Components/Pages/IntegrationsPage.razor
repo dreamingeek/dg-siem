@@ -111,7 +111,7 @@
                             @if (!_detail.Summary.Installed)
                             {
                                 <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="InstallAsync">Install</button>
-                                <span class="small text-body-secondary">Adds @Count(pack.Dashboards.Count, "dashboard") and @Count(pack.Alerts.Count, "alert") (switched off). Nothing runs until you turn it on for a tenant.</span>
+                                <span class="small text-body-secondary">Adds @Count(pack.Dashboards.Count, "dashboard") and @Count(pack.Alerts.Count, "alert") (switched off), and turns it on for tenants already sending this data. Dashboards and alerts of yours with the same names are taken over rather than duplicated.</span>
                             }
                             else
                             {
@@ -198,7 +198,7 @@
                                             </select>
                                             <button class="btn btn-sm btn-outline-primary" disabled="@_busy" @onclick="AddToAgentAsync">Add input</button>
                                         </div>
-                                        <p class="small text-body-secondary">Replaces an input of the same type on the same port. The agent picks it up within a minute.</p>
+                                        <p class="small text-body-secondary">If the agent already has an input of this type on this port, it's kept as it is (with this tenant's token added). The agent picks up changes within a minute.</p>
                                     }
                                 }
 
@@ -380,9 +380,9 @@
 
     private Task AddToAgentAsync() => RunAsync(async () =>
     {
-        await Integrations.AddInputToAgentAsync(_access!, _detail!.Summary.Pack.Id, _tenant!, _agentId, CancellationToken.None);
-        var agent = _detail.Tenants.First(t => t.Slug == _tenant).Agents.First(a => a.Id == _agentId).Name;
-        return $"Added to {agent}.";
+        var agent = _detail!.Tenants.First(t => t.Slug == _tenant).Agents.First(a => a.Id == _agentId).Name;
+        var result = await Integrations.AddInputToAgentAsync(_access!, _detail.Summary.Pack.Id, _tenant!, _agentId, CancellationToken.None);
+        return $"{agent}: {result}";
     });
 
     private async Task RunAsync(Func<Task<string>> action)
@@ -442,7 +442,10 @@
         if (report.Created > 0) parts.Add($"{report.Created} added");
         if (report.Updated > 0) parts.Add($"{report.Updated} updated");
         if (report.Removed > 0) parts.Add($"{report.Removed} removed");
+        if (report.Adopted is { Count: > 0 } adopted) parts.Add($"{adopted.Count} of yours taken over");
         var text = parts.Count == 0 ? $"{verb}; nothing needed changing." : $"{verb}: {string.Join(", ", parts)}.";
-        return report.KeptEdited.Count == 0 ? text : $"{text} Left your edited {string.Join(", ", report.KeptEdited.Select(n => $"\"{n}\""))} alone.";
+        if (report.KeptEdited.Count > 0) text += $" Left your edited {string.Join(", ", report.KeptEdited.Select(n => $"\"{n}\""))} alone.";
+        if (report.TurnedOnFor is { Count: > 0 } on) text += $" Turned on for the tenants already sending this data: {string.Join(", ", on)}.";
+        return text;
     }
 }

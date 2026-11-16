@@ -12,9 +12,9 @@ Packs are data only: a YAML file, no code. DG SIEM ships with some built in, and
 
 Open **Integrations** and choose a pack.
 
-1. **Install** it once for the server. This creates its dashboards and alert rules. The alerts start **switched off**.
+1. **Install** it once for the server. This creates its dashboards and alert rules. The alerts start **switched off**. The pack is turned on straight away for tenants that already send its data.
 2. Choose a tenant and **Turn on for &lt;tenant&gt;**. The setup steps then show the token generated for that tenant.
-3. **Add input** puts the pack's input on one of the tenant's agents. The agent picks it up within a minute. You can also paste the input into the agent's config yourself.
+3. **Add input** puts the pack's input on one of the tenant's agents. If the agent already has an input of that type on that port (every agent listens for syslog on 514), it's left as it is, with the tenant's token added when the pack uses one. The agent picks up changes within a minute. You can also paste the input into the agent's config yourself.
 4. Follow the steps at the source. The tenant's status changes to **Receiving data** once data arrives.
 5. Open the pack's alerts to turn them on and choose who hears about them.
 
@@ -40,9 +40,21 @@ To get a pack's current version of something you edited, delete your copy and ch
 
 ## Built-in packs
 
-| Pack | What it collects |
-|---|---|
-| Proxmox VE | Node, VM, container and storage metrics from Proxmox's Metric Server ([details](metrics.md#proxmox-ve)) |
+| Pack | What it collects | How it arrives |
+|---|---|---|
+| authentik | Sign-ins, failed logins and other audit events | Syslog (rsyslog or Docker's syslog driver) |
+| CrowdSec | Bans, scenarios, AppSec notices | Syslog (Docker's syslog driver) |
+| Pangolin / Traefik | Every request through the proxy, and scanners | Agent on the Pangolin host tails the JSON access log |
+| Phone systems | SIP scanning and brute force, registrations, trunks, calls ([details](phones.md)) | Agent on the PBX tails Asterisk's or FreeSWITCH's log |
+| Proxmox VE | Node, VM, container and storage metrics ([details](metrics.md#proxmox-ve)) | Proxmox's Metric Server (InfluxDB) |
+| UniFi | Firewall blocks, admin sign-ins, VPN, Wi-Fi, system events | UniFi Network's SIEM Server (syslog) |
+| Windows | Sign-ins, account and group changes, services, cleared logs, Defender ([details](windows.md)) | The Windows agent reads the event logs |
+
+Parsing these sources is built into the server; the packs bring the setup, dashboards and alerts.
+
+### Moving from the old ready-made lists
+
+Before the packs, the "Pangolin traffic" and "UniFi firewall" dashboards were starter dashboards and the Windows, Defender, PBX and authentik alerts came from **Alerts → Add ready-made alerts**. Installing a pack takes over the ones you already have, by name, rather than adding copies: they keep whether they're on and who they notify, and if you'd changed one it counts as edited, so pack updates leave it alone. On first install a pack is also turned on for every tenant that sent its data in the last week, so adopted alerts keep running where they did.
 
 ## Writing a pack
 
@@ -93,6 +105,7 @@ dashboards:
         kind: timeline        # timeline, timearea, timebars, stat, bars, pie, table, map
         unit: number          # number, duration, bytes, percent
         w: 6                  # optional width on the 12-column grid (and h for height)
+        # x: 0, y: 4          # optional fixed position; give both or neither
         search: '| mstats avg(cpustat_cpu) by host span=5m'
 
 alerts:
