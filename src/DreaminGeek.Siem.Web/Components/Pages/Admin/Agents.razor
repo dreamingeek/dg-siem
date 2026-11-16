@@ -23,7 +23,7 @@
     }
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="!_loaded">
     @if (_error is not null)
     {
         <div class="alert alert-danger small" role="alert">@_error</div>
@@ -242,6 +242,7 @@
     private Task<AuthenticationState> AuthState { get; set; } = default!;
 
     private UserAccess? _access;
+    private bool _loaded;
     private IReadOnlyList<AgentStatus> _agents = [];
     private IReadOnlyList<TenantSummary> _tenants = [];
     private string? _error;
@@ -262,7 +263,14 @@
     protected override async Task OnInitializedAsync()
     {
         _access = await Access.GetAsync((await AuthState).User, CancellationToken.None);
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
+            return;
+        }
         await LoadAsync();
+        _loaded = true;
     }
 
     private async Task LoadAsync()

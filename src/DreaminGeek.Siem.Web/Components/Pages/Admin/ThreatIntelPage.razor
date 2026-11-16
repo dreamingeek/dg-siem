@@ -22,7 +22,7 @@
     <p>Events to or from an address on these lists are marked as they arrive: search them with <code>threat_feed=*</code>.</p>
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="!_loaded">
     @if (_features is { ThreatIntel: false })
     {
         <div class="dg-callout" style="max-width: 48rem;">
@@ -228,6 +228,7 @@
     private Task<AuthenticationState> AuthState { get; set; } = default!;
 
     private UserAccess? _access;
+    private bool _loaded;
     private string? _by;
     private FeatureSettings? _features;
     private IReadOnlyList<ThreatFeedStatus> _feeds = [];
@@ -252,9 +253,16 @@
         {
             return;
         }
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
+            return;
+        }
         _by = user.Identity?.Name ?? "admin";
         _features = await Features.GetAsync(CancellationToken.None);
         await LoadAsync();
+        _loaded = true;
         // Downloads finish in the background: refresh while the page is open.
         _timer = new Timer(_ => InvokeAsync(async () =>
         {

@@ -15,7 +15,7 @@
     <p>Ready-made setups for the systems you run: how to send their data here, plus dashboards and alerts. Install a pack once, then turn it on for each tenant that uses it.</p>
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="_packs is null">
     @if (Catalog.Problems.Count > 0)
     {
         <section class="dg-panel mb-3">
@@ -285,6 +285,12 @@
     {
         if (_access?.IsGlobalAdmin != true)
         {
+            return;
+        }
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
             return;
         }
         if (_loadedFor != PackId || _packs is null)

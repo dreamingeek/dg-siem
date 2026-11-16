@@ -16,7 +16,7 @@
     <p>Agent versions this server hands out: to new machines through the install command, and to running agents as automatic updates.</p>
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="!_loaded">
     <div class="row g-3">
         <div class="col-xl-6">
             <section class="dg-panel h-100">
@@ -117,6 +117,7 @@
     private Task<AuthenticationState> AuthState { get; set; } = default!;
 
     private UserAccess? _access;
+    private bool _loaded;
     private IReadOnlyList<AgentPackage> _packages = [];
     private IReadOnlyList<AgentStatus> _agents = [];
     private bool _autoUpdate = true;
@@ -131,8 +132,15 @@
         {
             return;
         }
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
+            return;
+        }
         _autoUpdate = (await Settings.GetAgentUpdatesAsync(CancellationToken.None)).AutoUpdate;
         await LoadAsync();
+        _loaded = true;
     }
 
     private async Task LoadAsync()

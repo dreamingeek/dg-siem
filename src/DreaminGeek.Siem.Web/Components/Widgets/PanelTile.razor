@@ -113,6 +113,13 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the dashboard with every panel's loading bar now, and run the searches once it's
+            // live, so a slow panel doesn't hold up the whole page.
+            _loading = true;
+            return;
+        }
         var key = string.Join('\u001f', Panel.Query, Panel.Kind, From.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
             To.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture), string.Join(',', Tenants), Version.ToString(CultureInfo.InvariantCulture));
         if (key == _lastKey)

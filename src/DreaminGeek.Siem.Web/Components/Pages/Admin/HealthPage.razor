@@ -19,7 +19,7 @@
     <p>Everything that has to work for logs to arrive, be kept and raise alerts.</p>
 </div>
 
-<AdminOnly Access="_access">
+<AdminOnly Access="_access" Loading="!_loaded">
     @if (_error is not null)
     {
         <div class="alert alert-danger small" role="alert">@_error</div>
@@ -314,6 +314,7 @@
     private string? Tenant { get; set; }
 
     private UserAccess? _access;
+    private bool _loaded;
     private string? _email;
     private HealthReport? _report;
     private IReadOnlyList<SourceHealth> _sources = [];
@@ -337,10 +338,17 @@
         {
             return;
         }
+        if (!RendererInfo.IsInteractive)
+        {
+            // Prerendering: send the page with its loading bar now and load once it's live, instead of making the
+            // browser wait for the slow part (and doing it twice).
+            return;
+        }
         _email = user.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
             ?? (user.Identity?.Name is { } name && name.Contains('@', StringComparison.Ordinal) ? name : null);
         _zone = (await Settings.GetGeneralAsync(CancellationToken.None)).Zone;
         await LoadAsync();
+        _loaded = true;
         // Keep it current while it's open.
         _timer = new Timer(_ => InvokeAsync(async () =>
         {
