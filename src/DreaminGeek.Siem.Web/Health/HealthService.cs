@@ -27,13 +27,20 @@ public sealed record HealthCheck(string Name, CheckLevel Level, string Detail, s
 /// <param name="QuietAlert">The enabled quiet-source alert rule, if there is one.</param>
 /// <param name="AgentAlert">The enabled agent alert rule, if there is one.</param>
 /// <param name="SourcesAvailable">False when ClickHouse couldn't be asked about sources (so none are listed).</param>
+/// <param name="Targets">Prometheus scrape targets seen in the last day, with the last error of each failing one.</param>
 public sealed record HealthReport(
     DateTimeOffset At, IReadOnlyList<HealthCheck> Checks, IReadOnlyList<SourceHealth> Sources, IReadOnlyList<AgentStatus> Agents,
-    IReadOnlyList<IngestHour> Ingest, HealthSettings Settings, Guid? QuietAlert, Guid? AgentAlert, bool SourcesAvailable = true);
+    IReadOnlyList<IngestHour> Ingest, HealthSettings Settings, Guid? QuietAlert, Guid? AgentAlert, bool SourcesAvailable = true,
+    IReadOnlyList<TargetHealth>? Targets = null);
+
+/// <summary>A scrape target and, when its last scrape failed, why (from the agent).</summary>
+public sealed record TargetHealth(MetricTarget Target, TargetState State, string? Error);
 
 /// <summary>Administration &gt; Health: everything that has to work for logs to arrive, be kept, and raise alerts.</summary>
 public sealed class HealthService(
     SourceActivity sources,
+    MetricTargets metricTargets,
+    DreaminGeek.Siem.Ingest.Metrics.ScrapeErrors scrapeErrors,
     AgentHealth agents,
     ClickHouseStorage storage,
     RetentionService retention,
@@ -59,11 +66,13 @@ public sealed class HealthService(
 
         IReadOnlyList<SourceHealth> sourceList = [];
         IReadOnlyList<IngestHour> ingest = [];
+        IReadOnlyList<TargetHealth> targets = [];
         var sourcesAvailable = true;
         try
         {
             sourceList = await sources.GetSourcesAsync(tenants, now, ct);
             ingest = await sources.GetIngestAsync(tenants, 48, ct);
+            targets = await TargetsAsync(metricTargets, scrapeErrors, tenants, now, ct);
             checks.Add(await EventStoreAsync(ct));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -74,6 +83,10 @@ public sealed class HealthService(
         checks.Add(Ingest(pipeline.Status, sourceList, agentList, now));
         checks.Add(sourcesAvailable ? Sources(sourceList, health) : new("Log sources", CheckLevel.Off, "Can't check while ClickHouse isn't answering."));
         checks.Add(Agents(agentList, now));
+        if (targets.Count > 0)
+        {
+            checks.Add(Targets(targets, health));
+        }
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var rules = await db.AlertRules.AsNoTracking().Select(r => new { r.Id, r.Kind, r.Name, r.Enabled, r.LastError, r.EmailTo }).ToListAsync(ct);
@@ -90,7 +103,35 @@ public sealed class HealthService(
 
         return new HealthReport(now, checks, sourceList, agentList, ingest, health,
             rules.FirstOrDefault(r => r.Kind == AlertRuleKind.QuietSources && r.Enabled)?.Id,
-            rules.FirstOrDefault(r => r.Kind == AlertRuleKind.AgentProblems && r.Enabled)?.Id, sourcesAvailable);
+            rules.FirstOrDefault(r => r.Kind == AlertRuleKind.AgentProblems && r.Enabled)?.Id, sourcesAvailable, targets);
+    }
+
+    /// <summary>Scrape targets with their state now and the last error of failing ones.</summary>
+    public static async Task<IReadOnlyList<TargetHealth>> TargetsAsync(MetricTargets metricTargets,
+        DreaminGeek.Siem.Ingest.Metrics.ScrapeErrors errors, IReadOnlyCollection<string> tenants, DateTimeOffset now, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(metricTargets);
+        ArgumentNullException.ThrowIfNull(errors);
+        return (await metricTargets.GetAsync(tenants, ct))
+            .Select(t =>
+            {
+                var state = t.StateAt(now);
+                return new TargetHealth(t, state, state == TargetState.Down ? errors.Get(t.Tenant, t.Job, t.Instance) : null);
+            })
+            .OrderBy(t => t.State == TargetState.Up ? 1 : 0).ThenBy(t => t.Target.Tenant, StringComparer.Ordinal)
+            .ThenBy(t => t.Target.Job, StringComparer.Ordinal).ThenBy(t => t.Target.Instance, StringComparer.Ordinal).ToList();
+    }
+
+    private static HealthCheck Targets(IReadOnlyList<TargetHealth> targets, HealthSettings settings)
+    {
+        var watched = targets.Where(t => !settings.IsIgnored(t.Target.Key)).ToList();
+        var failing = watched.Where(t => t.State != TargetState.Up).ToList();
+        if (failing.Count == 0)
+        {
+            return new("Metric targets", CheckLevel.Ok, watched.Count == 1 ? "1 target answering" : $"{watched.Count} targets answering", "#metrics");
+        }
+        var names = string.Join(", ", failing.Take(3).Select(t => t.Target.Instance)) + (failing.Count > 3 ? $" and {failing.Count - 3} more" : "");
+        return new("Metric targets", CheckLevel.Bad, $"{failing.Count} of {watched.Count} not answering: {names}", "#metrics");
     }
 
     /// <summary>Leaves a retired source out of quiet-source alerts (or puts it back).</summary>

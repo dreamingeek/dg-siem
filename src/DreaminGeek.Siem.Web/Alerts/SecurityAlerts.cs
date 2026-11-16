@@ -47,7 +47,7 @@ public static class SecurityAlerts
             string.Empty, AlertSeverity.High, Schedule: "*/15 * * * *", Trigger: AlertTrigger.Once, SuppressMinutes: 24 * 60,
             Kind: AlertRuleKind.QuietSources),
         new(Health, "An agent is offline or falling behind",
-            "An agent stopped checking in (30 minutes), or events have waited in its buffer for over 30 minutes without getting through.",
+            "An agent stopped checking in (30 minutes), events have waited in its buffer for over 30 minutes without getting through, or a Prometheus target it scrapes stopped answering.",
             string.Empty, AlertSeverity.High, Schedule: "*/5 * * * *", Trigger: AlertTrigger.Once, SuppressMinutes: 12 * 60,
             Kind: AlertRuleKind.AgentProblems),
 

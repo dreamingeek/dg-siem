@@ -11,7 +11,9 @@ namespace DreaminGeek.Siem.Web.Health;
 /// going down sends one email, not one per source behind it. The alert's identity (for the quiet period) is the set of
 /// things wrong: the same set stays quiet, and anything newly wrong alerts again.
 /// </summary>
-public sealed class HealthAlertSource(SourceActivity sources, AgentHealth agents, SettingsStore settings) : IHealthAlertSource
+public sealed class HealthAlertSource(
+    SourceActivity sources, AgentHealth agents, MetricTargets metricTargets, DreaminGeek.Siem.Ingest.Metrics.ScrapeErrors scrapeErrors,
+    SettingsStore settings) : IHealthAlertSource
 {
     /// <summary>A backlog this old on a checking-in agent means events aren't getting through.</summary>
     public static readonly TimeSpan StuckBacklog = TimeSpan.FromMinutes(30);
@@ -62,10 +64,30 @@ public sealed class HealthAlertSource(SourceActivity sources, AgentHealth agents
                     a.LastSeen is { } seen ? Local(seen, zone) : "never", a.Version ?? "?"]));
             }
         }
-        string[] columns = ["agent", "problem", "last check-in", "version"];
+        // Prometheus targets the agents scrape: down (the scrape fails) or missing (no scrapes arriving).
+        var ignored = await settings.GetHealthAsync(ct);
+        foreach (var t in await HealthService.TargetsAsync(metricTargets, scrapeErrors, [tenant], now, ct))
+        {
+            if (t.State == TargetState.Up || ignored.IsIgnored(t.Target.Key))
+            {
+                continue;
+            }
+            var problem = t.State == TargetState.Down
+                ? "Metrics target not answering" + (t.Error is null ? "" : ": " + t.Error)
+                : $"No metrics scraped for {HealthText.Duration(now - t.Target.LastScrape)}";
+            problems.Add(($"{t.Target.Job} {t.Target.Instance}", t.State == TargetState.Down ? "down" : "missing",
+                [$"{t.Target.Job} target {t.Target.Instance}", problem, Local(t.Target.LastScrape, zone), ""]));
+        }
+
+        string[] columns = ["agent or target", "problem", "last seen", "version"];
         var label = problems.Count == 1
-            ? $"{problems[0].Agent} is {(problems[0].Kind == "offline" ? "offline" : "falling behind")}"
-            : $"{problems.Count} agents need attention";
+            ? problems[0].Kind switch
+            {
+                "offline" => $"{problems[0].Agent} is offline",
+                "backlog" => $"{problems[0].Agent} is falling behind",
+                _ => $"Metrics target {problems[0].Agent} isn't answering",
+            }
+            : $"{problems.Count} agents or targets need attention";
         return Result(columns, problems.Select(p => p.Row).ToList(),
             "agents:" + string.Join(',', problems.Select(p => $"{p.Agent}={p.Kind}").Order(StringComparer.Ordinal)), label);
     }

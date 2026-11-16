@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new ClickHouseClient(sp.GetRequiredService<IOptions<ClickHouseOptions>>().Value.ConnectionString));
         services.AddSingleton<ClickHouseMigrator>();
         services.AddSingleton<SourceActivity>();
+        services.AddSingleton<MetricTargets>();
         services.AddSingleton<TenantRowPolicies>();
         services.AddSingleton<ClickHouseStorage>();
         services.AddSingleton<IEventSink, ClickHouseEventSink>();

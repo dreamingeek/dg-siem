@@ -58,11 +58,11 @@
                 <p class="mb-2">
                     @if (r.QuietAlert is null && r.AgentAlert is null)
                     {
-                        <span>Nothing tells you when a source goes quiet or an agent drops off unless you open this page.</span>
+                        <span>Nothing tells you when a source goes quiet, an agent drops off or a metrics target stops answering unless you open this page.</span>
                     }
                     else
                     {
-                        <span>@(r.QuietAlert is null ? "Quiet sources" : "Agent problems") don't raise an alert yet.</span>
+                        <span>@(r.QuietAlert is null ? "Quiet sources" : "Agent and metrics target problems") don't raise an alert yet.</span>
                     }
                     Turn on the health alerts to get an email (to @(_email ?? "nobody: your login has no email address")) and an AlgaPSA ticket for each tenant when it happens.
                 </p>
@@ -234,6 +234,70 @@
                 <p class="small text-body-secondary px-3 pb-2 mb-0">Agents before 0.5 don't report what's waiting; they show it once they update.</p>
             }
         </section>
+
+        @if (r.Targets is { Count: > 0 } targets)
+        {
+            <section class="dg-panel mb-3" id="metrics">
+                <header>
+                    <h2>Metric targets</h2>
+                    <span class="dg-aside">Prometheus pages the agents scrape, from their last day of scrapes</span>
+                </header>
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>State</th>
+                                <th>Tenant</th>
+                                <th>Job</th>
+                                <th>Target</th>
+                                <th>Last scrape</th>
+                                <th>Every</th>
+                                <th class="num" title="Samples in the last successful scrape">Samples</th>
+                                <th class="num" title="Average scrape time, last hour">Takes</th>
+                                <th aria-label="Actions"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in targets)
+                            {
+                                var ignored = r.Settings.IsIgnored(t.Target.Key);
+                                <tr class="@(ignored ? "text-body-secondary" : "")">
+                                    <td class="text-nowrap">
+                                        <span class="dg-dot @(ignored ? "dg-dot-off" : TargetDot(t.State))" aria-hidden="true"></span>@(ignored ? "Ignored" : TargetText(t.State))
+                                    </td>
+                                    <td>@t.Target.Tenant</td>
+                                    <td><a href="@TargetLink(t.Target)">@t.Target.Job</a></td>
+                                    <td class="text-break">
+                                        @t.Target.Instance
+                                        @if (t.State == TargetState.Down && !ignored)
+                                        {
+                                            <div class="small text-warning">@(t.Error ?? "The last scrape failed; the agent's log says why.")
+                                                @if (t.Target.LastUp is { } lastUp) { <span class="text-body-secondary"> Last answered @HealthText.Duration(r.At - lastUp) ago.</span> }
+                                            </div>
+                                        }
+                                    </td>
+                                    <td class="text-nowrap" title="@Local(t.Target.LastScrape)">@HealthText.Duration(r.At - t.Target.LastScrape) ago</td>
+                                    <td class="text-nowrap">@(t.Target.Interval is { } every ? Every(every) : "–")</td>
+                                    <td class="num">@(t.Target.Samples is { } n ? Short(n) : "–")</td>
+                                    <td class="num text-nowrap">@(t.Target.Seconds is { } secs ? Seconds(secs) : "–")</td>
+                                    <td class="text-end text-nowrap">
+                                        @if (ignored)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-link py-0" disabled="@_busy" @onclick="() => IgnoreKeyAsync(t.Target.Key, false)">Watch again</button>
+                                        }
+                                        else if (t.State != TargetState.Up)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-link py-0" disabled="@_busy" @onclick="() => IgnoreKeyAsync(t.Target.Key, true)"
+                                                    title="Leave it out of the health check and alerts, e.g. a target you removed">Ignore</button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
     }
     else if (_loading)
     {
@@ -332,7 +396,35 @@
         await LoadAsync();
     }
 
-    private async Task IgnoreAsync(SourceHealth source, bool ignore)
+    private Task IgnoreAsync(SourceHealth source, bool ignore) => IgnoreKeyAsync(source.Key, ignore);
+
+    private static string TargetDot(TargetState state) => state switch
+    {
+        TargetState.Up => "dg-dot-ok",
+        TargetState.Down => "dg-dot-bad",
+        _ => "dg-dot-warn",
+    };
+
+    private static string TargetText(TargetState state) => state switch
+    {
+        TargetState.Up => "Up",
+        TargetState.Down => "Down",
+        _ => "No scrapes",
+    };
+
+    private static string TargetLink(MetricTarget t) =>
+        "search?q=" + Uri.EscapeDataString($"| mstats latest(up) as up, latest(scrape_samples_scraped) as samples, avg(scrape_duration_seconds) as seconds where job=\"{t.Job}\" instance=\"{t.Instance}\" span=5m") +
+        "&tenant=" + Uri.EscapeDataString(t.Tenant) + "&range=-24h";
+
+    private static string Every(TimeSpan every) => every.TotalSeconds < 90
+        ? $"{Math.Round(every.TotalSeconds):0} s"
+        : $"{Math.Round(every.TotalMinutes):0} min";
+
+    private static string Seconds(double secs) => secs < 1
+        ? $"{Math.Round(secs * 1000):0} ms"
+        : $"{secs:0.0} s";
+
+    private async Task IgnoreKeyAsync(string key, bool ignore)
     {
         if (_access?.IsGlobalAdmin != true)
         {
@@ -341,7 +433,7 @@
         _busy = true;
         try
         {
-            await Health.SetIgnoredAsync(source.Key, ignore, _email ?? _access.UserId.ToString(), CancellationToken.None);
+            await Health.SetIgnoredAsync(key, ignore, _email ?? _access.UserId.ToString(), CancellationToken.None);
             await LoadAsync();
         }
         finally

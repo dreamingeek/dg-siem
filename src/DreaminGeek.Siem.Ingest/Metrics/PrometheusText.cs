@@ -22,7 +22,11 @@ public static class PrometheusText
     }
 
     /// <summary>The samples in one scrape envelope. Lines that don't parse are skipped.</summary>
-    public static List<MetricSample> Parse(RawEnvelope envelope, string tenantId)
+    public static List<MetricSample> Parse(RawEnvelope envelope, string tenantId) => Parse(envelope, tenantId, out _);
+
+    /// <inheritdoc cref="Parse(RawEnvelope, string)"/>
+    /// <param name="error">Why the scrape failed, as the agent reported it; null when it worked.</param>
+    public static List<MetricSample> Parse(RawEnvelope envelope, string tenantId, out string? error)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         var job = envelope.Input[MetricScrape.InputPrefix.Length..];
@@ -31,7 +35,7 @@ public static class PrometheusText
         var samples = new List<MetricSample>();
         var types = new Dictionary<string, string>(StringComparer.Ordinal);
         double? duration = null;
-        string? error = null;
+        error = null;
 
         foreach (var raw in envelope.Message.AsSpan().EnumerateLines())
         {
