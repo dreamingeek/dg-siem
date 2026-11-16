@@ -2,7 +2,7 @@
 # Format: docs/integrations.md
 id: proxmox
 name: Proxmox VE
-version: 1
+version: 2
 category: Virtualization
 description: CPU, memory, network and storage for Proxmox nodes, VMs and containers, sent by Proxmox's Metric Server.
 docs: https://pve.proxmox.com/wiki/External_Metric_Server
@@ -72,6 +72,18 @@ dashboards:
         w: 6
         h: 5
         search: '| mstats latest(system_used) as used, latest(system_total) as total where object="storages" by host, nodename | where total > 0 | eval used_pct = round(used / total * 100, 1), used_gb = round(used / 1073741824), total_gb = round(total / 1073741824) | sort -used_pct | table host, nodename, used_pct, used_gb, total_gb'
+  - key: guests
+    name: Proxmox guests
+    description: CPU, memory, network and disk for each VM and container.
+    timeRange: -4h
+    panels:
+      - { title: Guest CPU (1 = all its cores busy), kind: timeline, w: 6, search: '| mstats avg(system_cpu) where object!="nodes" object!="storages" by host span=5m' }
+      - { title: Guest memory used, kind: timeline, unit: bytes, w: 6, search: '| mstats avg(system_mem) where object!="nodes" object!="storages" by host span=5m' }
+      - { title: Guest network out (bytes/s), kind: timeline, unit: bytes, w: 6, search: '| mstats rate(system_netout) where object!="nodes" object!="storages" by host span=5m' }
+      - { title: Guest network in (bytes/s), kind: timeline, unit: bytes, w: 6, search: '| mstats rate(system_netin) where object!="nodes" object!="storages" by host span=5m' }
+      - { title: Guest disk writes (bytes/s), kind: timeline, unit: bytes, w: 6, search: '| mstats rate(system_diskwrite) where object!="nodes" object!="storages" by host span=5m' }
+      - { title: Guest disk reads (bytes/s), kind: timeline, unit: bytes, w: 6, search: '| mstats rate(system_diskread) where object!="nodes" object!="storages" by host span=5m' }
+      - { title: Guests, kind: table, w: 12, h: 5, search: '| mstats latest(system_uptime) as up, latest(system_maxmem) as maxmem, avg(system_cpu) as cpu where object!="nodes" object!="storages" by host, object, vmid, nodename | eval up_days = round(up / 86400, 1), mem_gb = round(maxmem / 1073741824, 1), cpu_pct = round(cpu * 100, 1) | sort host | table host, object, vmid, nodename, up_days, mem_gb, cpu_pct' }
 
 alerts:
   - key: stopped

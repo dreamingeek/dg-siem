@@ -2,7 +2,7 @@
 # Format: docs/integrations.md
 id: unifi
 name: UniFi
-version: 2
+version: 3
 category: Network
 description: Firewall blocks, admin sign-ins, VPN, Wi-Fi and system events from UniFi gateways and consoles, sent as syslog.
 docs: https://help.ui.com/hc/en-us/articles/33349041044119
@@ -51,6 +51,20 @@ dashboards:
           search: 'dataset=unifi.firewall event.type=denied | stats count() by country' }
       - { title: 'Top blocked networks', kind: bars, x: 6, y: 10, w: 6, h: 5,
           search: 'dataset=unifi.firewall event.type=denied | top limit=10 org' }
+  - key: network
+    name: UniFi network
+    description: Admin sign-ins, VPN, Wi-Fi clients, DHCP leases and what each device is logging.
+    timeRange: -24h
+    panels:
+      - { title: Admin sign-ins, kind: stat, search: 'dataset=unifi.os action=admin_accessed_unifi_os | stats count()' }
+      - { title: VPN events, kind: stat, search: 'dataset=unifi.vpn | stats count()' }
+      - { title: Wi-Fi joins, kind: stat, search: 'dataset=unifi.ap action=sta_join | stats count()' }
+      - { title: DHCP clients, kind: stat, search: 'dataset=unifi.dhcp action=dhcpack | stats dc(client.mac)' }
+      - { title: Events by device (not firewall), kind: timebars, w: 8, search: 'dataset=unifi* NOT dataset=unifi.firewall | timechart count() by host' }
+      - { title: Event types, kind: bars, search: 'dataset=unifi* | top limit=10 dataset' }
+      - { title: Wi-Fi joins by access point, kind: timebars, w: 6, h: 4, search: 'dataset=unifi.ap action=sta_join | timechart count() by host' }
+      - { title: Admin sign-ins, kind: table, w: 6, h: 4, search: 'dataset=unifi.os action=admin_accessed_unifi_os | stats count() as signins, latest(src) as last_from by user, host | sort -signins' }
+      - { title: DHCP clients, kind: table, w: 12, h: 5, search: 'dataset=unifi.dhcp action=dhcpack | stats latest(client.ip) as ip, latest(unifi.dhcp.hostname) as name, count() as leases by client.mac, host | sort -leases | head 30' }
 
 alerts:
   - key: admin-signed-in

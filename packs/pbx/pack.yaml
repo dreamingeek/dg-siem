@@ -2,7 +2,7 @@
 # Format: docs/integrations.md
 id: pbx
 name: Phone systems
-version: 1
+version: 2
 category: Voice
 description: SIP brute force and extension scanning, registrations, trunk failures and failed calls from FreePBX (Asterisk) and FusionPBX or FS PBX (FreeSWITCH).
 
@@ -31,6 +31,20 @@ dashboards:
       - { title: Where attempts come from, kind: map, w: 4, h: 4, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats count() by country' }
       - { title: Top addresses trying, kind: table, w: 6, h: 5, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | stats count() as tries, dc(user) as extensions by src, country, org | sort -tries | head 20' }
       - { title: Extensions tried most, kind: bars, w: 6, h: 5, search: 'dataset IN (asterisk.security, freeswitch.security) outcome=failure | top limit=10 user' }
+  - key: activity
+    name: Phone system activity
+    description: Calls, hangup causes, registered phones and trunk health, for PBXs that aren't facing the internet too.
+    timeRange: -24h
+    panels:
+      - { title: Answered call legs, kind: stat, search: '(dataset=freeswitch.call OR dataset=asterisk.call) action=answered | stats count()' }
+      - { title: Failed calls, kind: stat, search: 'dataset=freeswitch.call action=hangup outcome=failure | stats count()' }
+      - { title: Phones registered, kind: stat, search: '(dataset=freeswitch.registration action=registered) OR (dataset=asterisk.registration action=endpoint-reachable) | stats dc(user)' }
+      - { title: Trunk ping failures, kind: stat, search: 'dataset=freeswitch.registration action IN (gateway-ping-failed, gateway-registration-failed) | stats count()' }
+      - { title: Call legs by PBX, kind: timebars, w: 8, search: '(dataset=freeswitch.call action=new-channel) OR (dataset=asterisk.call action=dial) | timechart count() by host' }
+      - { title: How calls ended, kind: bars, search: 'dataset=freeswitch.call action=hangup | top limit=10 freeswitch.hangup_cause' }
+      - { title: Registered phones, kind: table, w: 6, h: 5, search: '(dataset=freeswitch.registration action=registered) OR (dataset=asterisk.registration action=endpoint-reachable) | stats count() as registrations, latest(src) as last_from, latest(freeswitch.contact_private_ip) as lan_ip by user, host | sort user | head 50' }
+      - { title: Phones that dropped off, kind: table, w: 6, h: 5, search: '(dataset=freeswitch.registration action IN (expired, unregistered)) OR (dataset=asterisk.registration action=endpoint-unreachable) | stats count() as drops, latest(src) as last_from by user, host | sort -drops | head 30' }
+      - { title: Trunk pings, kind: timebars, w: 12, search: 'dataset=freeswitch.registration action IN (gateway-ping-ok, gateway-ping-failed, gateway-registration-failed) | timechart count() by action' }
 
 alerts:
 

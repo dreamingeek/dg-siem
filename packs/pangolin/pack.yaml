@@ -2,7 +2,7 @@
 # Format: docs/integrations.md
 id: pangolin
 name: Pangolin / Traefik
-version: 1
+version: 2
 category: Web
 description: Every request through Pangolin's Traefik (or any Traefik), with the site, status, response time, client, country and network, and the scanners hitting hostnames you don't serve.
 docs: https://doc.traefik.io/traefik/observability/access-logs/
@@ -53,6 +53,21 @@ dashboards:
           search: 'dataset=traefik.access | stats count() by country' }
       - { title: 'Top client networks', kind: bars, x: 6, y: 14, w: 6, h: 5,
           search: 'dataset=traefik.access | top limit=10 org' }
+  - key: scanners
+    name: Pangolin scanners
+    description: "Requests for hostnames and paths you don't serve (action=unrouted): what's being probed and who's probing."
+    timeRange: -24h
+    panels:
+      - { title: Scanner requests, kind: stat, search: 'dataset=traefik.access action=unrouted | stats count()' }
+      - { title: Scanning addresses, kind: stat, search: 'dataset=traefik.access action=unrouted | stats dc(src)' }
+      - { title: Hostnames probed, kind: stat, search: 'dataset=traefik.access action=unrouted | stats dc(domain)' }
+      - { title: Share of all requests (%), kind: stat, unit: percent, search: 'dataset=traefik.access | eval scan = if(action = "unrouted", 1, 0) | stats count() as total, sum(scan) as scans | eval share = round(scans / total * 100, 1) | table share' }
+      - { title: Scanner requests over time, kind: timebars, w: 8, search: 'dataset=traefik.access action=unrouted | timechart count() by country' }
+      - { title: What they look for, kind: bars, search: 'dataset=traefik.access action=unrouted | top limit=10 path' }
+      - { title: Where they come from, kind: map, search: 'dataset=traefik.access action=unrouted | stats count() by country' }
+      - { title: Their networks, kind: bars, w: 6, h: 5, search: 'dataset=traefik.access action=unrouted | top limit=10 org' }
+      - { title: Hostnames they try, kind: bars, w: 6, h: 5, search: 'dataset=traefik.access action=unrouted | top limit=10 domain' }
+      - { title: Busiest scanners, kind: table, w: 12, search: 'dataset=traefik.access action=unrouted | stats count() as requests, dc(path) as paths, latest(user_agent.original) as agent by src, country, org | sort -requests | head 20' }
 
 alerts:
   - key: server-errors
