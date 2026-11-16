@@ -157,7 +157,8 @@ public sealed class TraefikParser : IEventParser
         }
         var name = router.Split('@')[0];
         var dash = name.IndexOf('-', StringComparison.Ordinal);
-        if (dash <= 0 || !name[..dash].All(char.IsAsciiDigit) || !name.EndsWith("-router", StringComparison.Ordinal))
+        // "<id>-<resource>-router": the id's dash must come before "-router" ("8-router" has no resource).
+        if (dash <= 0 || !name[..dash].All(char.IsAsciiDigit) || !name.EndsWith("-router", StringComparison.Ordinal) || name.Length <= dash + "-router".Length)
         {
             return null;
         }

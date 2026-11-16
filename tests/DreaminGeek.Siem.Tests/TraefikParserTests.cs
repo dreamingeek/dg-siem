@@ -92,6 +92,7 @@ public class TraefikParserTests
     [InlineData("api-router@internal", null)]
     [InlineData("websecure-to-web@file", null)]
     [InlineData(null, null)]
+    [InlineData("8-router@http", null)]
     public void PangolinResourceFromRouterName(string? router, string? expected) =>
         Assert.Equal(expected, TraefikParser.PangolinResource(router));
 }
