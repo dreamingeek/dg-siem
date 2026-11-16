@@ -23,7 +23,8 @@ function options(data) {
     grid: { left: 44, right: 12, top: data.series.length > 1 ? 28 : 10, bottom: data.zoom ? 40 : 22 },
     legend: data.series.length > 1 ? { type: "scroll", top: 0, textStyle: { color: t.text }, itemWidth: 10, itemHeight: 10 } : undefined,
     tooltip: { trigger: "axis", backgroundColor: t.panel, borderColor: t.rule, textStyle: { color: t.text } },
-    xAxis: { type: "time", axisLine: { lineStyle: { color: t.rule } }, axisLabel: { color: t.muted }, splitLine: { show: false } },
+    // The search's range when given, so a single bucket isn't padded out to days either side.
+    xAxis: { type: "time", min: data.min ?? undefined, max: data.max ?? undefined, axisLine: { lineStyle: { color: t.rule } }, axisLabel: { color: t.muted }, splitLine: { show: false } },
     yAxis: { type: "value", axisLabel: { color: t.muted }, splitLine: { lineStyle: { color: t.rule } } },
     dataZoom: data.zoom ? [{ type: "inside" }, { type: "slider", height: 14, bottom: 6, borderColor: t.rule, textStyle: { color: t.muted } }] : undefined,
     series: data.series.map(s => ({
@@ -31,7 +32,8 @@ function options(data) {
       type: bars ? "bar" : "line",
       stack: data.stacked ? "total" : undefined,
       barMaxWidth: 18,
-      showSymbol: false,
+      // A line needs two points; show the dots while there are only a few.
+      showSymbol: s.points.length <= 2,
       data: s.points,
     })),
   };

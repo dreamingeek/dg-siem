@@ -29,8 +29,12 @@ public static class PanelData
     public const int BarItems = 15;
     public const int PieSlices = 8;
 
-    /// <summary>Timechart rows (<c>_time</c>, optional split value, values) → chart series.</summary>
-    public static object Timechart(QueryResult r, string kind = "bars", bool? stacked = null)
+    /// <summary>
+    /// Timechart rows (<c>_time</c>, optional split value, values) → chart series. With <paramref name="from"/> and
+    /// <paramref name="to"/>, the time axis spans the search's range rather than just the data (a single bucket
+    /// otherwise gets a day or more of padding either side).
+    /// </summary>
+    public static object Timechart(QueryResult r, string kind = "bars", bool? stacked = null, DateTimeOffset? from = null, DateTimeOffset? to = null)
     {
         ArgumentNullException.ThrowIfNull(r);
         var hasBy = r.Columns.Count >= 3 && r.Rows.Any(row => row[1] is string);
@@ -58,6 +62,8 @@ public static class PanelData
         {
             kind,
             stacked = stacked ?? (hasBy && valueColumns.Count == 1),
+            min = from?.ToUnixTimeMilliseconds(),
+            max = to?.ToUnixTimeMilliseconds(),
             series = series.Select(s => new { name = s.Key, points = s.Value }).ToList(),
         };
     }
