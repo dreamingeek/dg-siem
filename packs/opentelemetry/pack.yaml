@@ -1,0 +1,63 @@
+# OpenTelemetry: logs and metrics from apps instrumented with an OpenTelemetry SDK, or from an OpenTelemetry Collector.
+# Format: docs/integrations.md
+id: opentelemetry
+name: OpenTelemetry
+version: 1
+category: Apps
+description: Logs and metrics from anything that speaks OTLP, such as apps using an OpenTelemetry SDK or an OpenTelemetry Collector (which can also tail files and collect host metrics).
+docs: https://opentelemetry.io/docs/collector/
+
+setup:
+  input:
+    type: OtlpGrpc
+    port: 4317
+    job: otel
+    tokens: ["{{token}}"]
+  steps:
+    - "Add the input below to an agent the senders can reach (agent 0.8.0 or later). It's OTLP over gRPC, the default for the Collector and many SDKs. For OTLP over HTTP (port 4318, `/v1/logs` and `/v1/metrics`), add an input with type `Otlp` and port 4318 too."
+    - "**OpenTelemetry Collector**: add an `otlp` exporter with `endpoint: AGENT:{{port}}`, `tls: { insecure: true }` (or the agent's certificate if the input has `\"tls\": true`) and `headers: { authorization: \"Bearer {{token}}\" }`, and put it in your logs and metrics pipelines."
+    - "**An app's SDK**: set `OTEL_EXPORTER_OTLP_ENDPOINT=http://AGENT:{{port}}`, `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` and `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer {{token}}`, and give it a name with `OTEL_SERVICE_NAME`."
+    - Logs land in the dataset `otel.<service name>` (unless a parser recognises the line, e.g. Traefik's access log). Metrics are named as OpenTelemetry's Prometheus exporter names them (`http.server.duration` becomes `http_server_duration_bucket`, `_count` and `_sum`), with `job` set to the service name, so `| mstats` charts them. Traces are accepted and discarded.
+
+receiving:
+  search: 'otel.job=* | stats count() as events | where events > 0'
+  within: 1h
+
+dashboards:
+  - key: logs
+    name: OpenTelemetry logs
+    description: What each service is logging, its errors, and the traces they belong to.
+    timeRange: -24h
+    panels:
+      - { title: Log records, kind: stat, search: 'otel.job=* | stats count()' }
+      - { title: Errors, kind: stat, search: 'otel.job=* log.level IN (error, fatal) | stats count()' }
+      - { title: Services, kind: stat, search: 'otel.job=* | stats dc(service.name)' }
+      - { title: Hosts, kind: stat, search: 'otel.job=* | stats dc(host)' }
+      - { title: Records by service, kind: timebars, w: 8, search: 'otel.job=* | timechart count() by service.name' }
+      - { title: Levels, kind: pie, search: 'otel.job=* | top limit=6 log.level' }
+      - { title: Errors by service, kind: timebars, w: 6, h: 4, search: 'otel.job=* log.level IN (error, fatal) | timechart count() by service.name' }
+      - { title: Most common errors, kind: table, w: 6, h: 4, search: 'otel.job=* log.level IN (error, fatal) | stats count() as times, latest(@timestamp) as last by service.name, message | sort -times | head 15' }
+      - { title: Recent errors, kind: table, w: 12, h: 5, search: 'otel.job=* log.level IN (error, fatal) | head 50 | table @timestamp, service.name, host, message, trace.id' }
+  - key: hosts
+    name: OpenTelemetry hosts
+    description: CPU, memory, load, disk and network from the Collector's host metrics receiver.
+    timeRange: -4h
+    panels:
+      - { title: CPU busy (seconds per second), kind: timeline, w: 6, search: '| mstats rate(system_cpu_time) where state!="idle" state!="wait" by host_name span=5m' }
+      - { title: Load average (1 minute), kind: timeline, w: 6, search: '| mstats avg(system_cpu_load_average_1m) by host_name span=5m' }
+      - { title: Memory used, kind: timeline, unit: bytes, w: 6, search: '| mstats avg(system_memory_usage) where state="used" by host_name span=5m' }
+      - { title: Disk writes (bytes/s), kind: timeline, unit: bytes, w: 6, search: '| mstats rate(system_disk_io) where direction="write" by host_name span=5m' }
+      - { title: Network out (bytes/s), kind: timeline, unit: bytes, w: 6, search: '| mstats rate(system_network_io) where direction="transmit" by host_name span=5m' }
+      - { title: Filesystem used, kind: table, w: 6, search: '| mstats latest(system_filesystem_usage) as bytes where state="used" by host_name, mountpoint | eval gb = round(bytes / 1073741824, 1) | sort -gb | table host_name, mountpoint, gb' }
+
+alerts:
+  - key: errors
+    name: 'OpenTelemetry: a service is logging errors'
+    description: '20 or more error or fatal records from one service in 15 minutes.'
+    search: 'otel.job=* log.level IN (error, fatal) | stats count() as errors, latest(message) as last_error by service.name | where errors >= 20'
+    timeRange: 15m
+    schedule: '*/5 * * * *'
+    trigger: per-result
+    severity: medium
+    suppressBy: service.name
+    suppressMinutes: 60

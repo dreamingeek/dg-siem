@@ -531,7 +531,7 @@ else if (_access is not null)
             _errorPosition = response.ErrorPosition;
             _clickable = _result is { Shape: ResultShape.Events } res &&
                          new[] { "event.id", "@timestamp", "tenant", "host.name" }.All(c => res.Columns.Contains(c));
-            _pendingChart = _result is { Shape: ResultShape.Timechart } chart ? BuildChart(chart, IsMetrics(_query)) : null;
+            _pendingChart = _result is { Shape: ResultShape.Timechart } chart ? BuildChart(chart, IsMetrics(_query), from, to) : null;
 
             _histogram = [];
             if (_result is { Shape: ResultShape.Events })
@@ -576,8 +576,8 @@ else if (_access is not null)
     }
 
     // Metrics read better as lines: stacking temperatures or CPU per host would add them up.
-    private static object BuildChart(QueryResult r, bool metrics) =>
-        DreaminGeek.Siem.Web.Dashboards.PanelData.Timechart(r, metrics ? "line" : "bars", stacked: metrics ? false : null);
+    private static object BuildChart(QueryResult r, bool metrics, DateTimeOffset from, DateTimeOffset to) =>
+        DreaminGeek.Siem.Web.Dashboards.PanelData.Timechart(r, metrics ? "line" : "bars", stacked: metrics ? false : null, from, to);
 
     private static bool IsMetrics(string? query) =>
         query?.TrimStart().TrimStart('|').TrimStart().StartsWith("mstats ", StringComparison.OrdinalIgnoreCase) == true;

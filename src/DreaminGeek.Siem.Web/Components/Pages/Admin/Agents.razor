@@ -221,6 +221,11 @@
                                 <code>tokens</code>, or <code>InfluxDbUdp</code>. Names are <code>measurement_field</code>: <code>| mstats avg(cpustat_cpu) by host span=5m</code>.
                             </p>
                             <pre class="dg-example">{ "type": "InfluxDb", "port": 8086, "job": "proxmox", "tokens": ["TOKEN"] }</pre>
+                            <p class="mb-1">
+                                OpenTelemetry logs and metrics from SDKs or a Collector: <code>OtlpGrpc</code> (port 4317) or <code>Otlp</code> over HTTP (4318), with optional
+                                <code>tokens</code> sent as <code>Authorization: Bearer</code>. Logs land in <code>otel.&lt;service&gt;</code>; metrics work with <code>| mstats</code>.
+                            </p>
+                            <pre class="dg-example">{ "type": "OtlpGrpc", "port": 4317, "job": "otel", "tokens": ["TOKEN"] }</pre>
                             <p class="mb-1">Windows event logs (Windows agents get the default set when they enroll; list channels to change it, with an optional event-log XPath filter):</p>
                             <pre class="dg-example">{ "type": "WindowsEventLog", "channels": [ { "name": "Security" }, { "name": "Microsoft-Windows-TaskScheduler/Operational" }, { "name": "Microsoft-Windows-PowerShell/Operational", "query": "*[System[(EventID=4104)]]" } ] }</pre>
                             <p class="mb-1">Syslog on another port, only from this machine:</p>

@@ -44,6 +44,7 @@ To get a pack's current version of something you edited, delete your copy and ch
 |---|---|---|
 | authentik | Sign-ins, failed logins and other audit events | Syslog (rsyslog or Docker's syslog driver) |
 | CrowdSec | Bans, scenarios, AppSec notices | Syslog (Docker's syslog driver) |
+| OpenTelemetry | Logs and metrics from apps with an OpenTelemetry SDK, or a Collector ([details](opentelemetry.md)) | OTLP over gRPC or HTTP |
 | Pangolin / Traefik | Every request through the proxy, and scanners | Agent on the Pangolin host tails the JSON access log |
 | Phone systems | SIP scanning and brute force, registrations, trunks, calls ([details](phones.md)) | Agent on the PBX tails Asterisk's or FreeSWITCH's log |
 | Proxmox VE | Node, VM, container and storage metrics ([details](metrics.md#proxmox-ve)) | Proxmox's Metric Server (InfluxDB) |

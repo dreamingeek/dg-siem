@@ -93,7 +93,8 @@ function timeOptions(spec, unit, t) {
     grid: { left: 8, right: 12, top: multi ? 26 : 10, bottom: 4, containLabel: true },
     legend: multi ? { type: "scroll", top: 0, textStyle: { color: t.text, fontSize: 11 }, itemWidth: 10, itemHeight: 10, pageIconColor: t.amber, pageTextStyle: { color: t.muted } } : undefined,
     tooltip: { ...base(t).tooltip, trigger: "axis", valueFormatter: v => format(v, unit) },
-    xAxis: { type: "time", axisLine: { lineStyle: { color: t.rule } }, axisLabel: { color: t.muted, hideOverlap: true }, splitLine: { show: false } },
+    // The dashboard's range when given, so a single bucket isn't padded out to days either side.
+    xAxis: { type: "time", min: spec.min ?? undefined, max: spec.max ?? undefined, axisLine: { lineStyle: { color: t.rule } }, axisLabel: { color: t.muted, hideOverlap: true }, splitLine: { show: false } },
     yAxis: { type: "value", axisLabel: { color: t.muted, formatter: v => format(v, unit) }, splitLine: { lineStyle: { color: t.rule } } },
     series: spec.series.map(s => ({
       name: s.name,
@@ -101,7 +102,8 @@ function timeOptions(spec, unit, t) {
       stack: kind === "area" || (kind === "bars" && spec.stacked) ? "total" : undefined,
       areaStyle: kind === "area" ? { opacity: 0.35 } : undefined,
       barMaxWidth: 16,
-      showSymbol: false,
+      // A line needs two points; show the dots while there are only a few (a source that just started sending).
+      showSymbol: s.points.length <= 2,
       lineStyle: { width: 1.5 },
       data: s.points,
     })),

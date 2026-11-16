@@ -204,9 +204,10 @@ public sealed class AdminService(
 
     private static void ValidateInfluxInput(InputConfig input)
     {
+        var kind = input.Type is InputType.Otlp or InputType.OtlpGrpc ? "OpenTelemetry" : "InfluxDB";
         if (input.Job is { } job && (job.Length is 0 or > 100 || job.Any(char.IsControl)))
         {
-            throw new AdminException("An InfluxDB input's \"job\" should be a short name, e.g. \"proxmox\".");
+            throw new AdminException($"An {kind} input's \"job\" should be a short name, e.g. \"{(kind == "InfluxDB" ? "proxmox" : "otel")}\".");
         }
         if (input.Type == InputType.InfluxDbUdp && input.Tokens is { Count: > 0 })
         {
@@ -216,7 +217,7 @@ public sealed class AdminService(
         {
             if (token.Length < 8 || token.Length > 256 || token.Any(c => c is <= ' ' or >= (char)127))
             {
-                throw new AdminException("InfluxDB tokens must be 8 to 256 characters with no spaces.");
+                throw new AdminException($"{kind} tokens must be 8 to 256 characters with no spaces.");
             }
         }
     }
@@ -283,6 +284,8 @@ public sealed class AdminService(
         [InputType.Prometheus] = new Version(0, 6, 0),
         [InputType.InfluxDb] = new Version(0, 7, 0),
         [InputType.InfluxDbUdp] = new Version(0, 7, 0),
+        [InputType.Otlp] = new Version(0, 8, 0),
+        [InputType.OtlpGrpc] = new Version(0, 8, 0),
     };
 
     /// <summary>Refuses inputs the agent is too old to understand (it would reject the whole config).</summary>
@@ -343,7 +346,7 @@ public sealed class AdminService(
             {
                 throw new AdminException($"Input {input.Type} has an invalid bind address ({input.BindAddress}).");
             }
-            if (input.Type is InputType.InfluxDb or InputType.InfluxDbUdp)
+            if (input.Type is InputType.InfluxDb or InputType.InfluxDbUdp or InputType.Otlp or InputType.OtlpGrpc)
             {
                 ValidateInfluxInput(input);
             }

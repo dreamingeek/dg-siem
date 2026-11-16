@@ -1,6 +1,6 @@
 # Metrics
 
-DG SIEM can collect metrics alongside your logs: an agent scrapes Prometheus `/metrics` pages the way a Prometheus server would, or receives metrics pushed in InfluxDB line protocol (Proxmox VE, Telegraf), and you chart and alert on them with the `mstats` search command. Metrics are kept per tenant, like events, for 90 days. They aren't part of the nightly event backups or the S3 cold tier yet.
+DG SIEM can collect metrics alongside your logs: an agent scrapes Prometheus `/metrics` pages the way a Prometheus server would, or receives metrics pushed in InfluxDB line protocol (Proxmox VE, Telegraf) or OpenTelemetry's OTLP ([opentelemetry.md](opentelemetry.md)), and you chart and alert on them with the `mstats` search command. Metrics are kept per tenant, like events, for 90 days. They aren't part of the nightly event backups or the S3 cold tier yet.
 
 ## Scraping Prometheus exporters
 

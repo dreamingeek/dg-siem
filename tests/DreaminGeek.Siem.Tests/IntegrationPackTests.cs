@@ -248,7 +248,7 @@ public sealed class IntegrationPackTests : IDisposable
     {
         var catalog = Catalog();
         Assert.Empty(catalog.Problems);
-        Assert.Equal(["authentik", "crowdsec", "pangolin", "pbx", "proxmox", "unifi", "windows"], catalog.Packs.Select(p => p.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["authentik", "crowdsec", "opentelemetry", "pangolin", "pbx", "proxmox", "unifi", "windows"], catalog.Packs.Select(p => p.Id).Order(StringComparer.Ordinal));
         var now = DateTimeOffset.UtcNow;
         foreach (var alert in catalog.Packs.SelectMany(p => p.Alerts))
         {

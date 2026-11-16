@@ -119,6 +119,11 @@ public sealed partial class IngestPipeline : BackgroundService
                         {
                             while (batch.Count < _options.BatchSize && _metrics.Count < MaxMetricBatch && reader.TryRead(out var item))
                             {
+                                if (OtlpPush.IsOtlp(item.Envelope))
+                                {
+                                    AddOtlp(item.TenantId, item.Envelope, batch);
+                                    continue;
+                                }
                                 if (Metrics.InfluxLineProtocol.IsPush(item.Envelope))
                                 {
                                     if (_metricSink is not null)
@@ -137,14 +142,7 @@ public sealed partial class IngestPipeline : BackgroundService
                                     }
                                     continue;
                                 }
-                                var parsed = _parsers.Parse(item.Envelope, item.TenantId);
-                                if (_drops.Match(parsed) is null)
-                                {
-                                    _geo.Enrich(parsed);
-                                    _threats?.Enrich(parsed);
-                                    parsed.RetentionDays = _retention.DaysFor(parsed.TenantId, parsed.EventDataset);
-                                    batch.Add(parsed);
-                                }
+                                Keep(_parsers.Parse(item.Envelope, item.TenantId), batch);
                             }
                         }
                     }
@@ -200,6 +198,44 @@ public sealed partial class IngestPipeline : BackgroundService
 
     /// <summary>Samples written at once; a big scrape can go over it, then the batch is written right away.</summary>
     private const int MaxMetricBatch = 50_000;
+
+    /// <summary>Applies drop rules and enrichment, and adds the event to the batch unless a rule drops it.</summary>
+    private void Keep(LogEvent parsed, List<LogEvent> batch)
+    {
+        if (_drops.Match(parsed) is null)
+        {
+            _geo.Enrich(parsed);
+            _threats?.Enrich(parsed);
+            parsed.RetentionDays = _retention.DaysFor(parsed.TenantId, parsed.EventDataset);
+            batch.Add(parsed);
+        }
+    }
+
+    /// <summary>An OpenTelemetry request: its logs become events, its metrics samples. A malformed one is dropped and logged.</summary>
+    private void AddOtlp(string tenantId, RawEnvelope envelope, List<LogEvent> batch)
+    {
+        try
+        {
+            if (Otlp.OtlpConvert.ToEvents(envelope, tenantId, _parsers) is { } events)
+            {
+                foreach (var e in events)
+                {
+                    Keep(e, batch);
+                }
+            }
+            else if (_metricSink is not null && Otlp.OtlpConvert.ToSamples(envelope, tenantId) is { } samples)
+            {
+                _metrics.AddRange(samples);
+            }
+        }
+        catch (Otlp.OtlpFormatException ex)
+        {
+            LogBadOtlp(_logger, tenantId, envelope.SourceAddress ?? "?", ex.Message);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dropped an OpenTelemetry request for {Tenant} from {Source}: {Problem}")]
+    private static partial void LogBadOtlp(ILogger logger, string tenant, string source, string problem);
 
     private async Task FlushAsync(List<LogEvent> batch, CancellationToken cancellationToken)
     {
