@@ -7,7 +7,6 @@
 @inject IntegrationService Integrations
 @inject PackCatalog Catalog
 @inject TenantAccess Access
-@inject NavigationManager Nav
 
 <PageTitle>Integrations · DG SIEM</PageTitle>
 
@@ -58,7 +57,7 @@
                                 @foreach (var s in group)
                                 {
                                     <li>
-                                        <a href="integrations/@s.Pack.Id" class="@(s.Pack.Id == PackId ? "active" : null)" aria-current="@(s.Pack.Id == PackId ? "page" : null)">
+                                        <a href="integrations/@s.Pack.Id" class="@(s.Pack.Id == Selected ? "active" : null)" aria-current="@(s.Pack.Id == Selected ? "page" : null)">
                                             <span class="dg-pack-name">@s.Pack.Name</span>
                                             <span class="dg-pack-state">
                                                 @if (!s.Installed)
@@ -90,7 +89,7 @@
             {
                 <section class="dg-panel">
                     <div class="dg-body small text-body-secondary">
-                        @(PackId is null ? "Choose a pack to see what it sets up." : _packs is null ? "Loading…" : $"There's no pack \"{PackId}\".")
+                        @(_packs is null ? "Loading…" : PackId is null ? "Choose a pack to see what it sets up." : $"There's no pack \"{PackId}\".")
                     </div>
                 </section>
             }
@@ -301,12 +300,11 @@
     private async Task LoadAsync()
     {
         _packs = await Integrations.ListAsync(_access!, CancellationToken.None);
-        if (PackId is null && _packs.Count > 0)
-        {
-            Nav.NavigateTo($"integrations/{_packs[0].Pack.Id}", replace: true);
-            return;
-        }
-        _detail = PackId is null ? null : await Integrations.GetAsync(_access!, PackId, CancellationToken.None);
+        // /integrations shows the first pack in place. Redirecting instead would happen during prerendering,
+        // where it becomes an HTTP redirect with an absolute URL; behind a TLS-terminating proxy that URL is
+        // http://, which browsers block on an https page.
+        var selected = Selected;
+        _detail = selected is null ? null : await Integrations.GetAsync(_access!, selected, CancellationToken.None);
         if (_detail is not null)
         {
             // Stay on the chosen tenant; otherwise start with one the pack is on for.
@@ -413,6 +411,9 @@
         _packs = null;
         await LoadAsync();
     }
+
+    /// <summary>The pack in the address, or the first one when the address names none.</summary>
+    private string? Selected => PackId ?? _packs?.FirstOrDefault()?.Pack.Id;
 
     private string TenantName() => _detail?.Tenants.FirstOrDefault(t => t.Slug == _tenant)?.Name ?? _tenant ?? "";
 
