@@ -123,6 +123,8 @@ public sealed partial class AgentService(IOptions<AgentOptions> options, ILogger
                 InputType.Hec => () => new HecInput(input, buffer, certificate, logger).RunAsync(ct),
                 InputType.InfluxDb => () => new InfluxHttpInput(input, buffer, certificate, logger).RunAsync(ct),
                 InputType.InfluxDbUdp => () => new InfluxUdpInput(input, buffer, logger).RunAsync(ct),
+                InputType.Otlp => () => new OtlpInput(input, buffer, certificate, logger, grpc: false).RunAsync(ct),
+                InputType.OtlpGrpc => () => new OtlpInput(input, buffer, certificate, logger, grpc: true).RunAsync(ct),
                 InputType.Prometheus => async () =>
                 {
                     using var scraper = new PrometheusInput(input, buffer, logger);

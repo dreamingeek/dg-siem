@@ -85,3 +85,65 @@ public static class MetricPush
         _ => null,
     };
 }
+
+/// <summary>
+/// How agents ship OpenTelemetry (OTLP) requests: one envelope per request, the request's protobuf or JSON body
+/// as it arrived (decompressed, base64 for protobuf) after a header line. The server decodes it (logs become events,
+/// metrics become samples), so the agent stays simple and new OTLP features only need a server update.
+/// </summary>
+public static class OtlpPush
+{
+    /// <summary>Envelope input prefix; the rest is the input's job name (<c>otlp:otel</c>).</summary>
+    public const string InputPrefix = "otlp:";
+
+    /// <summary>First line: <c># dgsiem_otlp signal=logs encoding=protobuf</c> (signal logs or metrics; encoding protobuf or json).</summary>
+    public const string HeaderPrefix = "# dgsiem_otlp ";
+
+    public static RawEnvelope Envelope(string? job, string? source, string signal, bool json, ReadOnlySpan<byte> body) =>
+        new(DateTimeOffset.UtcNow, InputPrefix + (string.IsNullOrWhiteSpace(job) ? "otel" : job), source,
+            $"{HeaderPrefix}signal={signal} encoding={(json ? "json" : "protobuf")}\n" +
+            (json ? System.Text.Encoding.UTF8.GetString(body) : Convert.ToBase64String(body)));
+
+    public static bool IsOtlp(RawEnvelope envelope) =>
+        envelope?.Input.StartsWith(InputPrefix, StringComparison.Ordinal) == true &&
+        envelope.Message.StartsWith(HeaderPrefix, StringComparison.Ordinal);
+
+    /// <summary>Reads an envelope back: the signal, whether it's JSON, and the body.</summary>
+    public static bool TryRead(RawEnvelope envelope, out string signal, out bool json, out byte[] body)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        signal = string.Empty;
+        json = false;
+        body = [];
+        var message = envelope.Message;
+        var newline = message.IndexOf('\n', StringComparison.Ordinal);
+        if (!IsOtlp(envelope) || newline < 0)
+        {
+            return false;
+        }
+        foreach (var part in message.AsSpan(HeaderPrefix.Length, newline - HeaderPrefix.Length).ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part.StartsWith("signal=", StringComparison.Ordinal))
+            {
+                signal = part[7..];
+            }
+            else if (part == "encoding=json")
+            {
+                json = true;
+            }
+        }
+        var payload = message.AsSpan(newline + 1);
+        if (json)
+        {
+            body = System.Text.Encoding.UTF8.GetBytes(payload.ToString());
+            return signal.Length > 0;
+        }
+        var bytes = new byte[payload.Length * 3 / 4 + 3];
+        if (!Convert.TryFromBase64Chars(payload, bytes, out var written))
+        {
+            return false;
+        }
+        body = bytes[..written];
+        return signal.Length > 0;
+    }
+}

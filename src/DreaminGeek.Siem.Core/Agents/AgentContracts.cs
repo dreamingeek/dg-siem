@@ -99,6 +99,10 @@ public enum InputType
     InfluxDb,
     /// <summary>Receive InfluxDB line protocol datagrams over UDP.</summary>
     InfluxDbUdp,
+    /// <summary>OpenTelemetry (OTLP) over HTTP: logs and metrics on /v1/logs and /v1/metrics, protobuf or JSON (port 4318).</summary>
+    Otlp,
+    /// <summary>OpenTelemetry (OTLP) over gRPC: the Collector's and many SDKs' default (port 4317).</summary>
+    OtlpGrpc,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<MultilineMode>))]

@@ -103,6 +103,11 @@ curl -H "Authorization: DGSIEM <token>" "http://agent:8088/services/collector/ra
 - A string event is parsed like any other log line, so a Traefik or syslog line sent over HEC lands in its usual dataset. Docker's `{"line": ...}` is unwrapped, with `docker.stream` and `docker.tag`. A JSON object is flattened into fields (`http.request.method`), and common names map to the ECS columns: `msg` → `message`, `level` → `log.level`, `user` → `user.name`, `client_ip` → `source.ip`, `action` → `event.action`.
 - `event.dataset` is the input's `dataset`, else the sourcetype (`docker:web` → `docker.web`), else `hec`. HEC `time` and `host` fill in when the line has none. `source`, `sourcetype`, `index` and `fields` are kept as `hec.source`, `hec.sourcetype`, `hec.index` and plain fields. Indexes don't route anything: each agent's events go to its tenant.
 
+Agents also take metrics and OpenTelemetry:
+
+- **`Prometheus`** scrapes `/metrics` pages, and **`InfluxDb`/`InfluxDbUdp`** receive InfluxDB line protocol (Proxmox, Telegraf): [metrics.md](metrics.md).
+- **`OtlpGrpc`/`Otlp`** receive OpenTelemetry logs and metrics from SDKs and the Collector: [opentelemetry.md](opentelemetry.md).
+
 ## Managing agents
 
 Upload agent versions on **Administration → Agent updates**. New machines then install with one command from **Enroll an agent**, and agents from 0.4.0 on update themselves when a newer version is uploaded. See [agent-updates.md](agent-updates.md).

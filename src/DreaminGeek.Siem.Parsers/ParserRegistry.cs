@@ -5,7 +5,8 @@ namespace DreaminGeek.Siem.Parsers;
 /// <summary>Runs registered parsers in priority order; the first successful parse wins.</summary>
 public sealed class ParserRegistry
 {
-    private const string UnparsedDataset = "unparsed";
+    /// <summary>The dataset of a line no parser recognised.</summary>
+    public const string UnparsedDataset = "unparsed";
 
     private readonly IEventParser[] _parsers;
 
