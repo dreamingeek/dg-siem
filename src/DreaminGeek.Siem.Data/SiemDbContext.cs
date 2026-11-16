@@ -19,6 +19,8 @@ public sealed class SiemDbContext(DbContextOptions<SiemDbContext> options)
     public DbSet<AlertFiring> AlertFirings => Set<AlertFiring>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<DropRuleEntity> DropRules => Set<DropRuleEntity>();
+    public DbSet<InstalledPack> InstalledPacks => Set<InstalledPack>();
+    public DbSet<TenantPack> TenantPacks => Set<TenantPack>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -57,6 +59,7 @@ public sealed class SiemDbContext(DbContextOptions<SiemDbContext> options)
         builder.Entity<AlertRule>(e =>
         {
             e.HasIndex(a => a.Name).IsUnique();
+            e.HasIndex(a => new { a.PackId, a.PackItem });
             e.HasOne(a => a.Tenant).WithMany().HasForeignKey(a => a.TenantId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<AlertFiring>(e =>
@@ -73,6 +76,18 @@ public sealed class SiemDbContext(DbContextOptions<SiemDbContext> options)
         {
             e.HasIndex(d => d.Name).IsUnique();
             e.Property(d => d.LayoutJson).HasColumnType("jsonb");
+            e.HasIndex(d => new { d.PackId, d.PackItem });
+        });
+        builder.Entity<InstalledPack>(e =>
+        {
+            e.HasKey(p => p.PackId);
+            e.Property(p => p.PackId).HasMaxLength(64);
+        });
+        builder.Entity<TenantPack>(e =>
+        {
+            e.HasKey(p => new { p.TenantId, p.PackId });
+            e.Property(p => p.PackId).HasMaxLength(64);
+            e.HasOne(p => p.Tenant).WithMany().HasForeignKey(p => p.TenantId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

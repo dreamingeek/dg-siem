@@ -189,6 +189,16 @@ public class MstatsTests
     }
 
     [Fact]
+    public void Table_and_fields_keep_a_label_named_like_a_field_alias()
+    {
+        // "host" is an alias of host.name for events; after mstats it's the label column itself.
+        var q = Compile("| mstats latest(system_used) as used where object=\"storages\" by host, nodename | eval gb = used / 1073741824 | table host, nodename, gb");
+        Assert.Equal(["host", "nodename", "gb"], q.Columns);
+        var dropped = Compile("| mstats latest(system_used) as used by host, nodename | fields - nodename");
+        Assert.Equal(["host", "used"], dropped.Columns);
+    }
+
+    [Fact]
     public void Several_labels_make_one_series_column_in_a_timechart()
     {
         var q = Compile("| mstats avg(up) by job, instance span=1m");

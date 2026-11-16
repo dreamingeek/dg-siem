@@ -69,6 +69,8 @@ Each line becomes one sample per numeric field, named `<measurement>_<field>` (t
 
 ### Proxmox VE
 
+The **Proxmox VE** integration pack (**Integrations**) does this setup for you: it generates the token, adds the input to an agent and installs a dashboard and alerts. See [Integrations](integrations.md). By hand:
+
 In **Datacenter → Metric Server → Add → InfluxDB**:
 
 - **Server**: the agent's address; **Port**: the input's port

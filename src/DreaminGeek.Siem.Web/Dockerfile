@@ -6,6 +6,7 @@ COPY global.json Directory.Build.props Directory.Packages.props .editorconfig ./
 COPY src/ src/
 # Install scripts embedded in the server for the agent packages it builds.
 COPY deploy/agent/ deploy/agent/
+COPY packs/ packs/
 COPY LICENSE ./
 RUN dotnet publish src/DreaminGeek.Siem.Web/DreaminGeek.Siem.Web.csproj -c Release -p:Version="${VERSION#v}" -o /app
 

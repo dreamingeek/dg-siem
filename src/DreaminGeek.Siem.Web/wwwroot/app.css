@@ -417,3 +417,28 @@ fieldset legend.form-label { float: none; font-size: 0.8125rem; }
   .dg-feeds li { grid-template-columns: 2.5rem minmax(0, 1fr); }
   .dg-feed-state { grid-column: 2; }
 }
+
+/* Integrations */
+.dg-pack-group { padding: 0.625rem 0.875rem 0.25rem; color: var(--dg-muted); font-size: 0.75rem; }
+.dg-pack-list { list-style: none; margin: 0; padding: 0 0 0.375rem; }
+.dg-pack-list a { display: grid; gap: 0.125rem; padding: 0.5rem 0.875rem; color: inherit; text-decoration: none; border-left: 2px solid transparent; }
+.dg-pack-list a:hover { background: var(--dg-slate-2); }
+.dg-pack-list a.active { background: var(--dg-amber-soft); border-left-color: var(--dg-amber); }
+.dg-pack-list a:focus-visible { outline: 2px solid var(--dg-amber); outline-offset: -2px; }
+.dg-pack-name { font-weight: 600; }
+.dg-pack-state { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.75rem; color: var(--dg-muted); }
+.dg-pack-update { color: var(--dg-amber); }
+.dg-pack-desc { font-size: 0.75rem; color: var(--dg-muted); }
+.dg-pack-tenants { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.dg-pack-tenants button { background: none; border: 1px solid var(--dg-rule); border-radius: var(--bs-border-radius); padding: 0.25rem 0.625rem; color: inherit; font-size: 0.8125rem; }
+.dg-pack-tenants button:hover { background: var(--dg-slate-2); }
+.dg-pack-tenants button.active { border-color: var(--dg-amber); background: var(--dg-amber-soft); }
+.dg-pack-h3 { font-size: 0.8125rem; font-weight: 600; margin: 0.75rem 0 0.375rem; }
+.dg-pack-steps { padding-left: 1.25rem; margin-bottom: 0.75rem; font-size: 0.8125rem; }
+.dg-pack-steps li { margin-bottom: 0.25rem; }
+.dg-pack-steps .dg-pack-value { user-select: all; word-break: break-all; }
+.dg-pack-items { list-style: none; padding: 0; font-size: 0.8125rem; }
+.dg-pack-items li { padding: 0.25rem 0; border-bottom: 1px solid var(--dg-rule); }
+.dg-pack-items li:last-child { border-bottom: 0; }
+.dg-pack-kind { display: inline-block; min-width: 5.5rem; color: var(--dg-muted); font-size: 0.75rem; }
+.dg-pack-edited { margin-left: 0.5rem; padding: 0 0.375rem; border: 1px solid var(--dg-rule); border-radius: var(--bs-border-radius-sm); color: var(--dg-muted); font-size: 0.6875rem; }

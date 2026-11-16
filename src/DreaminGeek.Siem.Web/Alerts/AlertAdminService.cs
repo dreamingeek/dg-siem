@@ -29,6 +29,8 @@ public sealed class AlertRuleForm
     public string? EmailTo { get; set; }
     public bool CreateTicket { get; set; }
     public bool Enabled { get; set; } = true;
+    /// <summary>The integration pack that created the rule (read-only here).</summary>
+    public string? PackId { get; init; }
 }
 
 public sealed record AlertRuleSummary(
@@ -79,7 +81,7 @@ public sealed class AlertAdminService(
             .GroupBy(f => f.AlertRuleId).Select(g => new { g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
         return rules.Select(r => new AlertRuleSummary(
-            r.Id, r.Name, r.Description, r.Tenant?.Slug, r.Severity, DescribeSchedule(r.Schedule), r.Enabled,
+            r.Id, r.Name, r.Description, r.Tenant?.Slug ?? (r.PackId is { } pack ? $"tenants with {pack} on" : null), r.Severity, DescribeSchedule(r.Schedule), r.Enabled,
             AlertDispatcher.Recipients(r.EmailTo).Count > 0, r.CreateTicket, r.LastRunAt, r.LastFiredAt, r.LastError,
             r.Enabled ? AlertRunner.NextRun(r, zone) : null, counts.GetValueOrDefault(r.Id))).ToList();
     }
@@ -108,6 +110,7 @@ public sealed class AlertAdminService(
             EmailTo = r.EmailTo,
             CreateTicket = r.CreateTicket,
             Enabled = r.Enabled,
+            PackId = r.PackId,
         };
     }
 

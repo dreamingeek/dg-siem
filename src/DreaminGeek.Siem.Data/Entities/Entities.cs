@@ -106,6 +106,12 @@ public sealed class Dashboard
     public Guid OwnerId { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>The integration pack that created this (e.g. <c>proxmox</c>), and its item key; null for your own.</summary>
+    public string? PackId { get; set; }
+    public string? PackItem { get; set; }
+    /// <summary>Fingerprint of what the pack wrote; when it no longer matches, someone edited it and pack updates leave it alone.</summary>
+    public string? PackHash { get; set; }
 }
 
 public enum AlertCondition
@@ -177,6 +183,12 @@ public sealed class AlertRule
     public DateTimeOffset? LastFiredAt { get; set; }
     /// <summary>Why the last run failed (bad query, ClickHouse down); null when it worked.</summary>
     public string? LastError { get; set; }
+
+    /// <summary>The integration pack that created this (e.g. <c>proxmox</c>), and its item key; null for your own.</summary>
+    public string? PackId { get; set; }
+    public string? PackItem { get; set; }
+    /// <summary>Fingerprint of what the pack wrote; when it no longer matches, someone edited it and pack updates leave it alone.</summary>
+    public string? PackHash { get; set; }
 }
 
 public enum AlertFiringStatus
@@ -246,4 +258,24 @@ public sealed class DropRuleEntity
     public long DroppedTotal { get; set; }
     public DateTimeOffset? LastDroppedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>An integration pack installed on the server: its dashboards and alert rules exist (alerts start switched off).</summary>
+public sealed class InstalledPack
+{
+    public required string PackId { get; set; }
+    public int Version { get; set; }
+    public DateTimeOffset InstalledAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>An integration pack turned on for one tenant: its alerts run for the tenant, and its setup has the tenant's token.</summary>
+public sealed class TenantPack
+{
+    public Guid TenantId { get; set; }
+    public Tenant Tenant { get; set; } = null!;
+    public required string PackId { get; set; }
+    /// <summary>Token for the pack's agent input (e.g. the InfluxDB write token), shown in the setup steps.</summary>
+    public string? Token { get; set; }
+    public DateTimeOffset EnabledAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -581,12 +581,12 @@ public sealed class ClickHouseCompiler(string database, CompilerOptions? options
             List<string> names;
             if (exclude)
             {
-                var drop = fields.Select(OutputName).ToHashSet(StringComparer.Ordinal);
+                var drop = fields.Select(ColumnName).ToHashSet(StringComparer.Ordinal);
                 names = CurrentColumns().Where(c => !drop.Contains(c)).ToList();
             }
             else
             {
-                names = fields.Select(OutputName).Distinct(StringComparer.Ordinal).ToList();
+                names = fields.Select(ColumnName).Distinct(StringComparer.Ordinal).ToList();
             }
             _stage.Select = names.Select(n => (ValidName(n, position), Resolve(n, position))).ToList();
             if (!_stage.EventMode && _stage.Shape == ResultShape.Events)
@@ -923,6 +923,13 @@ public sealed class ClickHouseCompiler(string database, CompilerOptions? options
         }
 
         private static string OutputName(string field) => FieldCatalog.Canonical(field);
+
+        /// <summary>
+        /// A column of the current result by that exact name (e.g. a metric's <c>host</c> label from mstats), else
+        /// the field's canonical name (<c>host</c> → <c>host.name</c> for events).
+        /// </summary>
+        private string ColumnName(string field) =>
+            !_stage.EventMode && _stage.Fields.ContainsKey(field) ? field : OutputName(field);
 
         private static string OutputName(Aggregation agg) =>
             agg.Field is null ? agg.Function : $"{agg.Function}({FieldCatalog.Canonical(agg.Field)})";

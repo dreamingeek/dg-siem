@@ -28,6 +28,7 @@ Built on **.NET 10**, **Blazor**, **ClickHouse** and **PostgreSQL**, and runs as
 - **Parsers for common MSP gear:** UniFi, Traefik/Pangolin, CrowdSec, authentik, Asterisk/FreePBX, FreeSWITCH/FusionPBX, Windows, plus generic syslog and JSON. Fields use [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html) names.
 - **Search** with a pipe language (`dataset=unifi.firewall action=block | stats count by source.ip | sort -count`), compiled to parameterized SQL, with a field sidebar, timecharts, event context and saved searches.
 - **Metrics:** agents scrape Prometheus `/metrics` pages or receive InfluxDB line protocol (Proxmox, Telegraf), and `mstats` charts them next to your logs.
+- **Integrations:** packs for systems like Proxmox bundle the setup steps, agent input, dashboards and alerts; turn one on per tenant, or write your own in YAML.
 - **Dashboards and alerts:** drag-and-resize dashboards, scheduled searches that email you or open tickets in AlgaPSA, and a health page that notices when a log source goes quiet or an agent drops off.
 - **Storage that stays affordable:** retention per tenant and dataset, an optional S3 cold tier, GeoIP enrichment, optional threat-intel feeds, and nightly encrypted backups.
 
@@ -74,6 +75,7 @@ Before exposing it to the internet, put port 8080 behind a TLS reverse proxy and
 | [Backups](docs/backups.md) | Nightly backups and restores |
 | [GeoIP](docs/geoip.md) | Country, city and ASN enrichment |
 | [Threat intel](docs/threat-intel.md) | Optional blocklist feeds (off by default) |
+| [Integrations](docs/integrations.md) | Ready-made packs (setup, dashboards, alerts) per system; writing your own |
 | [Metrics](docs/metrics.md) | Scraping Prometheus exporters, receiving Proxmox/InfluxDB metrics, charting with `mstats` |
 
 ## Architecture

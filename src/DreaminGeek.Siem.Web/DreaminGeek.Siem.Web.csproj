@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="QRCoder" />
+    <PackageReference Include="YamlDotNet" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Certificate" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
@@ -24,7 +25,11 @@
     </PackageReference>
   </ItemGroup>
 
-  <!-- Install scripts and units put into the agent packages the server builds (AgentPackageStore). -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DreaminGeek.Siem.Tests" />
+  </ItemGroup>
+
+  <!-- Install scripts and units put into the agent packages the server builds (AgentPackageStore), and the built-in integration packs (PackCatalog). -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\deploy\agent\install.sh" LogicalName="agent/install.sh" />
     <EmbeddedResource Include="..\..\deploy\agent\install.ps1" LogicalName="agent/install.ps1" />
@@ -32,6 +37,11 @@
     <EmbeddedResource Include="..\..\deploy\agent\dg-siem-agent-update.service" LogicalName="agent/dg-siem-agent-update.service" />
     <EmbeddedResource Include="..\..\deploy\agent\dg-siem-agent-update.path" LogicalName="agent/dg-siem-agent-update.path" />
     <EmbeddedResource Include="..\..\LICENSE" LogicalName="agent/LICENSE" />
+    <EmbeddedResource Include="..\..\packs\**\pack.yaml" LogicalName="packs/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- A build without the packs folder (e.g. a Dockerfile that doesn't copy it) would ship no built-in packs. -->
+  <Target Name="RequireBuiltInPacks" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\packs\proxmox\pack.yaml')" Text="The packs folder is missing (packs/proxmox/pack.yaml): copy it into the build." />
+  </Target>
 </Project>

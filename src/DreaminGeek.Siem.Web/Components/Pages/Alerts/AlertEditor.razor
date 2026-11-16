@@ -26,6 +26,13 @@
     else
     {
         <form class="dg-alert-form" @onsubmit="SaveAsync" @onsubmit:preventDefault>
+            @if (_form.PackId is { } pack)
+            {
+                <p class="small mb-3">
+                    From the <a href="integrations/@pack">@pack integration pack</a>: it runs for each tenant the pack is on for.
+                    Turning it on or changing who it notifies keeps pack updates coming; changing the search, schedule or condition makes updates leave it alone.
+                </p>
+            }
             <section class="dg-panel mb-3">
                 <header><h2>@(_form.Kind == AlertRuleKind.Search ? "Search" : "Health check")</h2></header>
                 <div class="dg-body row g-3">
