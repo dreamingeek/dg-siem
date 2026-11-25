@@ -308,8 +308,13 @@
         }
     }
 
+    // Re-read the saved settings so this doesn't undo "Require two-factor" (set on the Users page).
     private async Task SaveGeneralAsync() =>
-        _generalStatus = await Try(() => Alerts.SaveGeneralAsync(_access!, new GeneralSettings(_publicUrl, _timeZone), CancellationToken.None), "Saved.");
+        _generalStatus = await Try(async () =>
+        {
+            var saved = (await Alerts.GetSettingsAsync(_access!, CancellationToken.None)).General;
+            await Alerts.SaveGeneralAsync(_access!, saved with { PublicUrl = _publicUrl, TimeZone = _timeZone }, CancellationToken.None);
+        }, "Saved.");
 
     private async Task SaveSmtpAsync()
     {

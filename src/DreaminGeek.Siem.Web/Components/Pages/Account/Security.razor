@@ -8,6 +8,7 @@
 @inject UserManager<SiemUser> Users
 @inject SettingsStore Settings
 @inject TwoFactorPolicy Policy
+@inject SsoService Sso
 @inject NavigationManager Nav
 
 <PageTitle>Your account · DG SIEM</PageTitle>
@@ -147,6 +148,60 @@
             </div>
         </section>
     </div>
+
+    @if (Sso.Current.Ready || _ssoAccount is not null)
+    {
+        <div class="col-12">
+            <section class="dg-panel">
+                <header>
+                    <h2>Single sign-on</h2>
+                    <span class="small">
+                        @if (_ssoAccount is not null)
+                        {
+                            <span><span class="dg-dot dg-dot-ok"></span>Linked</span>
+                        }
+                        else
+                        {
+                            <span><span class="dg-dot dg-dot-off"></span>Not linked</span>
+                        }
+                    </span>
+                </header>
+                <div class="dg-body">
+                    @if (SsoResult is { } result && SsoResultMessage(result) is { } message)
+                    {
+                        <div class="alert @(result == "linked" ? "alert-success" : "alert-danger") small" role="status">@message</div>
+                    }
+                    @if (_ssoAccount is not null)
+                    {
+                        <p class="small mb-2">
+                            Linked to the @Sso.Current.ButtonLabel account <strong>@_ssoAccount</strong>. Use <em>Sign in with @Sso.Current.ButtonLabel</em> on the sign-in page;
+                            @Sso.Current.ButtonLabel asks for the second factor.
+                        </p>
+                        <div class="d-flex gap-2 flex-wrap">
+                            @if (Sso.Current.Ready)
+                            {
+                                <a class="btn btn-sm btn-outline-secondary" href="account/sso/link" data-enhance-nav="false">Link a different account</a>
+                            }
+                            @if (_confirmUnlink)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="UnlinkAsync">Unlink</button>
+                                <button type="button" class="btn btn-sm btn-link" @onclick="() => _confirmUnlink = false">Keep it</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-sm btn-link text-danger" @onclick="() => _confirmUnlink = true">Unlink…</button>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="small">Link your @Sso.Current.ButtonLabel account to sign in with it instead of your password and authenticator code. You'll sign in to @Sso.Current.ButtonLabel to confirm it's yours.</p>
+                        <a class="btn btn-sm btn-primary" href="account/sso/link" data-enhance-nav="false">Link your @Sso.Current.ButtonLabel account</a>
+                    }
+                </div>
+            </section>
+        </div>
+    }
 </div>
 
 @code {
@@ -158,6 +213,20 @@
 
     [SupplyParameterFromQuery(Name = "password")]
     private string? PasswordChanged { get; set; }
+
+    [SupplyParameterFromQuery(Name = "sso")]
+    private string? SsoResult { get; set; }
+
+    private string? _ssoAccount;
+    private bool _confirmUnlink;
+
+    private string? SsoResultMessage(string result) => result switch
+    {
+        "linked" => $"Linked. You can now use Sign in with {Sso.Current.ButtonLabel}.",
+        "taken" => $"That {Sso.Current.ButtonLabel} account is already linked to another DG SIEM user.",
+        "failed" => "Linking didn't work. Try again.",
+        _ => null,
+    };
 
     [CascadingParameter]
     private Task<AuthenticationState> AuthState { get; set; } = default!;
@@ -190,7 +259,8 @@
         }
         _policyRequires = (await Settings.GetGeneralAsync(CancellationToken.None)).RequireTwoFactor;
         await RefreshStatusAsync();
-        _mustSetUp = _policyRequires && !_enabled;
+        // A single sign-on session had its second factor at the provider.
+        _mustSetUp = _policyRequires && !_enabled && !DreaminGeek.Siem.Web.Security.Sso.SignedInWithSso((await AuthState).User);
         if (_mustSetUp)
         {
             await StartSetupAsync();
@@ -206,6 +276,26 @@
         _user = await Users.FindByIdAsync(_user.Id.ToString());
         _enabled = _user is not null && await Users.GetTwoFactorEnabledAsync(_user);
         _recoveryLeft = _user is null ? 0 : await Users.CountRecoveryCodesAsync(_user);
+        _ssoAccount = _user is null ? null : (await Users.GetLoginsAsync(_user))
+            .Where(l => l.LoginProvider == DreaminGeek.Siem.Web.Security.Sso.Scheme).Select(l => l.ProviderDisplayName ?? l.ProviderKey).FirstOrDefault();
+    }
+
+    private async Task UnlinkAsync()
+    {
+        if (_user is null)
+        {
+            return;
+        }
+        _busy = true;
+        foreach (var login in (await Users.GetLoginsAsync(_user)).Where(l => l.LoginProvider == DreaminGeek.Siem.Web.Security.Sso.Scheme).ToList())
+        {
+            await Users.RemoveLoginAsync(_user, login.LoginProvider, login.ProviderKey);
+        }
+        _confirmUnlink = false;
+        await RefreshStatusAsync();
+        _busy = false;
+        // Removing a login updates the security stamp, which ends single sign-on sessions in other browsers; re-issue this one.
+        Nav.NavigateTo("/account/refresh?returnUrl=%2Faccount%2Fsecurity", forceLoad: true);
     }
 
     private async Task StartSetupAsync()

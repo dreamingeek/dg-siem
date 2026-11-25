@@ -80,6 +80,10 @@ public sealed class TwoFactorPolicy(SettingsStore settings, IMemoryCache cache)
     public async Task<bool> IsSatisfiedAsync(HttpContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (Sso.SignedInWithSso(context.User))
+        {
+            return true; // the provider asked for the second factor
+        }
         var general = await cache.GetOrCreateAsync("2fa:policy", async e =>
         {
             e.AbsoluteExpirationRelativeToNow = CacheFor;

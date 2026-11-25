@@ -67,7 +67,7 @@ Before exposing it to the internet, put port 8080 behind a TLS reverse proxy and
 | [Windows agent](docs/windows.md) | Event logs, install, Sysmon |
 | [Agent updates](docs/agent-updates.md) | Uploading versions; agents update themselves |
 | [Phones and PBXs](docs/phones.md) | FreePBX/Asterisk and FusionPBX logging |
-| [Users and access](docs/users.md) | Accounts, client logins, two-factor, tenant isolation |
+| [Users and access](docs/users.md) | Accounts, client logins, two-factor, single sign-on (Authentik), tenant isolation |
 | [Search](docs/search.md) | The pipe language and the search page |
 | [Dashboards](docs/dashboards.md) | Panels, starter dashboards |
 | [Alerting](docs/alerting.md) | Scheduled searches, email, AlgaPSA tickets |

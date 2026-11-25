@@ -123,10 +123,12 @@
         </div>
     </section>
 
+    <SsoSettingsPanel Access="_access" />
+
     <section class="dg-panel">
         <div class="table-responsive">
             <table class="table">
-                <thead><tr><th>User</th><th>Access</th><th>Two-factor</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>User</th><th>Access</th><th>Two-factor</th><th>Single sign-on</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                     @foreach (var u in _users)
                     {
@@ -167,6 +169,16 @@
                                     <span class="text-body-secondary"><span class="dg-dot dg-dot-off"></span>Off</span>
                                 }
                             </td>
+                            <td>
+                                @if (u.SsoAccount is not null)
+                                {
+                                    <span title="Linked to this account at the provider">@u.SsoAccount</span>
+                                }
+                                else
+                                {
+                                    <span class="text-body-secondary">Not linked</span>
+                                }
+                            </td>
                             <td>@(u.Locked ? "Locked" : "Active")</td>
                             <td class="text-end text-nowrap">
                                 @if (u.Locked)
@@ -183,6 +195,17 @@
                                     else
                                     {
                                         <button type="button" class="btn btn-sm btn-link" title="For a lost phone: they sign in with just their password and set it up again" @onclick="() => _confirmReset2fa = u.Id">Reset two-factor</button>
+                                    }
+                                }
+                                @if (u.SsoAccount is not null && !isMe)
+                                {
+                                    @if (_confirmUnlink == u.Id)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => UnlinkAsync(u)">Confirm unlink</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-sm btn-link" title="They'll need to sign in with their password and link again" @onclick="() => _confirmUnlink = u.Id">Unlink sign-on</button>
                                     }
                                 }
                                 @if (!isMe)
@@ -219,6 +242,7 @@
     private string? _passwordFor;
     private Guid? _confirmDelete;
     private Guid? _confirmReset2fa;
+    private Guid? _confirmUnlink;
     private bool _requireTwoFactor;
     private bool _meHasTwoFactor;
 
@@ -295,6 +319,12 @@
         var general = (await AlertAdmin.GetSettingsAsync(_access!, CancellationToken.None)).General;
         await AlertAdmin.SaveGeneralAsync(_access!, general with { RequireTwoFactor = on }, CancellationToken.None);
         Policy.Forget();
+    });
+
+    private Task UnlinkAsync(UserSummary user) => Run(async () =>
+    {
+        await Admin.UnlinkSsoAsync(_access, user.Id, CancellationToken.None);
+        _confirmUnlink = null;
     });
 
     private Task UnlockAsync(UserSummary user) => Run(() => Admin.UnlockAsync(_access, user.Id, CancellationToken.None));

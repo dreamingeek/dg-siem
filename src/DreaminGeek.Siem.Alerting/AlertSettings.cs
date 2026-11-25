@@ -96,6 +96,27 @@ public sealed record HealthSettings(IReadOnlyList<IgnoredSource> Ignored)
 /// <summary>The cold tier's S3-compatible bucket (Administration &gt; Storage). The secret is stored encrypted.</summary>
 public sealed record ColdStorageSettings(string Endpoint, string AccessKeyId, string? SecretAccessKey);
 
+/// <summary>
+/// Sign-in through an OpenID Connect provider such as Authentik (Administration &gt; Users). The client secret is
+/// stored encrypted.
+/// </summary>
+/// <param name="Authority">The provider's issuer, e.g. <c>https://auth.example.com/application/o/dg-siem/</c>.</param>
+/// <param name="Label">The provider's name on the sign-in button ("Sign in with …").</param>
+/// <param name="PasswordsAdminsOnly">Only global admins may still sign in with a password (a way in if the provider is down).</param>
+public sealed record SsoSettings(bool Enabled, string? Authority, string? ClientId, string? ClientSecret, string? Label, bool PasswordsAdminsOnly = false)
+{
+    public const string DefaultLabel = "Authentik";
+
+    public static SsoSettings Default { get; } = new(false, null, null, null, null);
+
+    [JsonIgnore]
+    public string ButtonLabel => string.IsNullOrWhiteSpace(Label) ? DefaultLabel : Label;
+
+    /// <summary>On, with everything the sign-in needs.</summary>
+    [JsonIgnore]
+    public bool Ready => Enabled && !string.IsNullOrWhiteSpace(Authority) && !string.IsNullOrWhiteSpace(ClientId) && !string.IsNullOrWhiteSpace(ClientSecret);
+}
+
 /// <param name="AutoUpdate">Agents install newer versions uploaded to the server on their own.</param>
 public sealed record AgentUpdateSettings(bool AutoUpdate = true);
 
@@ -115,6 +136,7 @@ public sealed class SettingsStore(IDbContextFactory<SiemDbContext> dbFactory, ID
     private const string HealthKey = "health";
     private const string FeaturesKey = "features";
     private const string ThreatIntelKey = "threatintel";
+    public const string SsoKey = "sso";
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -169,6 +191,20 @@ public sealed class SettingsStore(IDbContextFactory<SiemDbContext> dbFactory, ID
     {
         ArgumentNullException.ThrowIfNull(settings);
         return WriteAsync(ColdStorageKey, settings with { SecretAccessKey = Protect(settings.SecretAccessKey ?? string.Empty) }, ct);
+    }
+
+    public async Task<SsoSettings> GetSsoAsync(CancellationToken ct)
+    {
+        var stored = await ReadAsync<SsoSettings>(SsoKey, ct);
+        return stored is null ? SsoSettings.Default : stored with { ClientSecret = Unprotect(stored.ClientSecret) };
+    }
+
+    /// <param name="settings">A null client secret keeps the stored one.</param>
+    public async Task SaveSsoAsync(SsoSettings settings, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var existing = (await ReadAsync<SsoSettings>(SsoKey, ct))?.ClientSecret;
+        await WriteAsync(SsoKey, settings with { ClientSecret = settings.ClientSecret is null ? existing : Protect(settings.ClientSecret) }, ct);
     }
 
     public async Task<AgentUpdateSettings> GetAgentUpdatesAsync(CancellationToken ct) =>
