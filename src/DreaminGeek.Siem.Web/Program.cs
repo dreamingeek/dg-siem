@@ -97,7 +97,25 @@ auth.AddIdentityCookies(cookies =>
 });
 // Sessions re-check the account every minute, so a password reset, two-factor change or access change
 // signs out other browsers promptly. Open tabs (Blazor circuits) get the same check from the provider below.
-builder.Services.Configure<SecurityStampValidatorOptions>(o => o.ValidationInterval = DreaminGeek.Siem.Web.Security.RevalidatingIdentityStateProvider.Interval);
+builder.Services.Configure<SecurityStampValidatorOptions>(o =>
+{
+    o.ValidationInterval = DreaminGeek.Siem.Web.Security.RevalidatingIdentityStateProvider.Interval;
+    // Keep how the session signed in (single sign-on counts as two-factor) when the check re-issues the cookie.
+    o.OnRefreshingPrincipal = ctx =>
+    {
+        if (ctx.NewPrincipal?.Identity is System.Security.Claims.ClaimsIdentity identity && ctx.CurrentPrincipal is { } current)
+        {
+            foreach (var method in current.FindAll(System.Security.Claims.ClaimTypes.AuthenticationMethod))
+            {
+                if (!identity.HasClaim(method.Type, method.Value))
+                {
+                    identity.AddClaim(new System.Security.Claims.Claim(method.Type, method.Value));
+                }
+            }
+        }
+        return Task.CompletedTask;
+    };
+});
 builder.Services.ConfigureApplicationCookie(o =>
 {
     o.LoginPath = "/account/login";
@@ -126,6 +144,15 @@ builder.Services.ConfigureApplicationCookie(o =>
     };
 });
 builder.Services.AddAgentAuthentication(auth);
+if (!isAdminCommand)
+{
+    // Single sign-on (Authentik or another OpenID Connect provider), set up in Administration → Users; the
+    // options are built from those settings.
+    auth.AddOpenIdConnect(DreaminGeek.Siem.Web.Security.Sso.Scheme, _ => { });
+    builder.Services.AddSingleton<DreaminGeek.Siem.Web.Security.SsoService>();
+    builder.Services.AddSingleton<IConfigureOptions<Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectOptions>, DreaminGeek.Siem.Web.Security.SsoOptionsSetup>();
+    builder.Services.AddHttpClient(DreaminGeek.Siem.Web.Security.SsoService.HttpClientName, http => http.Timeout = TimeSpan.FromSeconds(10));
+}
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider, DreaminGeek.Siem.Web.Security.RevalidatingIdentityStateProvider>();
 builder.Services.AddSingleton<DreaminGeek.Siem.Web.Security.TenantAccess>();
@@ -211,6 +238,7 @@ if (clickHouseOptions.EnforceRowPolicies)
     var slugs = await policyScope.ServiceProvider.GetRequiredService<SiemDbContext>().Tenants.Select(t => t.Slug).ToListAsync();
     await app.Services.GetRequiredService<TenantRowPolicies>().InitializeAsync(slugs, CancellationToken.None);
 }
+await app.Services.GetRequiredService<DreaminGeek.Siem.Web.Security.SsoService>().LoadAsync(CancellationToken.None);
 _ = app.Services.GetRequiredService<CertificateAuthority>().ServerCertificate; // create CA/cert at startup, not on first agent
 // A server update can bring fixed install scripts; rebuild stored agent packages around them.
 await app.Services.GetRequiredService<AgentPackageStore>().RefreshScriptsAsync(CancellationToken.None);
@@ -277,6 +305,7 @@ app.MapPost("/account/logout", async (SignInManager<SiemUser> signIn) =>
     await signIn.SignOutAsync();
     return Results.LocalRedirect("/account/login");
 });
+DreaminGeek.Siem.Web.Security.Sso.MapSsoEndpoints(app);
 // Agent packages for an admin to download from the Agent updates page (UI port, global admins only).
 app.MapGet("/admin/agent-packages/{platform}/{version}", async (string platform, string version, HttpContext context,
     DreaminGeek.Siem.Web.Security.TenantAccess access, AgentPackageStore packages) =>

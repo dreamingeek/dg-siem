@@ -1,0 +1,138 @@
+@* Administration → Users: single sign-on through Authentik or another OpenID Connect provider. *@
+@using DreaminGeek.Siem.Alerting
+@using DreaminGeek.Siem.Web.Admin
+@using DreaminGeek.Siem.Web.Security
+@inject SsoService Sso
+@inject NavigationManager Nav
+
+<section class="dg-panel mb-3" id="sso">
+    <header>
+        <h2>Single sign-on</h2>
+        <span class="small">
+            @if (Sso.Current.Ready)
+            {
+                <span><span class="dg-dot dg-dot-ok"></span>On</span>
+            }
+            else
+            {
+                <span class="text-body-secondary"><span class="dg-dot dg-dot-off"></span>Off</span>
+            }
+        </span>
+    </header>
+    <div class="dg-body">
+        <p class="small text-body-secondary">
+            Sign in through Authentik (or another OpenID Connect provider) instead of a password and authenticator code; the provider asks for the second
+            factor. Accounts are still added here. Each person links their provider account once from their account page, or it links by itself when the
+            provider marks their email as verified.
+        </p>
+        <form class="row g-2" @onsubmit="SaveAsync" @onsubmit:preventDefault autocomplete="off">
+            <div class="col-12">
+                <div class="form-check form-switch">
+                    <input id="ssoon" type="checkbox" class="form-check-input" role="switch" @bind="_enabled" />
+                    <label class="form-check-label" for="ssoon">Show <em>Sign in with @(string.IsNullOrWhiteSpace(_label) ? SsoSettings.DefaultLabel : _label.Trim())</em> on the sign-in page</label>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <label class="form-label small" for="ssoauth">Provider address (issuer)</label>
+                <input id="ssoauth" class="form-control form-control-sm" @bind="_authority" placeholder="https://auth.example.com/application/o/dg-siem/" spellcheck="false" />
+                <div class="form-text">In Authentik: the provider's <em>OpenID Configuration Issuer</em>.</div>
+            </div>
+            <div class="col-lg-6">
+                <label class="form-label small" for="ssobtn">Button name</label>
+                <input id="ssobtn" class="form-control form-control-sm" @bind="_label" placeholder="@SsoSettings.DefaultLabel" maxlength="40" />
+                <div class="form-text">Sign in with …</div>
+            </div>
+            <div class="col-lg-6">
+                <label class="form-label small" for="ssoid">Client ID</label>
+                <input id="ssoid" class="form-control form-control-sm" @bind="_clientId" spellcheck="false" />
+            </div>
+            <div class="col-lg-6">
+                <label class="form-label small" for="ssosecret">Client secret</label>
+                <input id="ssosecret" type="password" class="form-control form-control-sm" @bind="_secret" autocomplete="new-password"
+                       placeholder="@(Sso.Current.ClientSecret is null ? "" : "Saved; type to replace")" />
+            </div>
+            <div class="col-12">
+                <span class="form-label small d-block">Password sign-in</span>
+                <div class="form-check">
+                    <input id="ssopwall" type="radio" class="form-check-input" name="ssopw" checked="@(!_adminsOnly)" @onchange="() => _adminsOnly = false" />
+                    <label class="form-check-label small" for="ssopwall">Everyone can still use a password</label>
+                </div>
+                <div class="form-check">
+                    <input id="ssopwadm" type="radio" class="form-check-input" name="ssopw" checked="@_adminsOnly" @onchange="() => _adminsOnly = true" />
+                    <label class="form-check-label small" for="ssopwadm">Global admins only, as a way in if the provider is down</label>
+                </div>
+            </div>
+            <div class="col-12">
+                <span class="form-label small d-block">Redirect URI for the provider</span>
+                <code class="user-select-all">@_redirectUri</code>
+                <div class="form-text">
+                    In Authentik: an OAuth2/OpenID provider, client type <em>Confidential</em>, with this as a <em>Strict</em> redirect URI. Bind it to an
+                    application, and limit that application to the people who should reach DG SIEM.
+                    @if (_publicUrl is null)
+                    {
+                        <span>It's this page's address; behind a reverse proxy, set the <a href="admin/notifications">public URL</a> so it says https.</span>
+                    }
+                </div>
+            </div>
+            <div class="col-12 d-flex gap-3 align-items-center">
+                <button type="submit" class="btn btn-sm btn-primary" disabled="@_busy">@(_busy ? "Checking the provider…" : "Save")</button>
+                @if (_status is { } status)
+                {
+                    <span class="small @(status.Ok ? "text-success" : "text-danger")" role="status">@status.Message</span>
+                }
+            </div>
+        </form>
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public UserAccess? Access { get; set; }
+
+    private bool _enabled;
+    private bool _adminsOnly;
+    private bool _busy;
+    private string? _authority;
+    private string? _clientId;
+    private string? _secret;
+    private string? _label;
+    private string? _publicUrl;
+    private string _redirectUri = string.Empty;
+    private Outcome? _status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var s = Sso.Current;
+        _enabled = s.Enabled;
+        _adminsOnly = s.PasswordsAdminsOnly;
+        _authority = s.Authority;
+        _clientId = s.ClientId;
+        _label = s.Label;
+        _publicUrl = await Sso.PublicUrlAsync(CancellationToken.None);
+        _redirectUri = DreaminGeek.Siem.Web.Security.Sso.RedirectUri(_publicUrl, Nav.BaseUri);
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _status = null;
+        try
+        {
+            var saved = await Sso.SaveAsync(Access, new SsoSettings(_enabled, _authority, _clientId,
+                string.IsNullOrWhiteSpace(_secret) ? null : _secret, _label, _adminsOnly), CancellationToken.None);
+            _authority = saved.Authority;
+            _secret = null;
+            _status = new(true, saved.Enabled
+                ? "Saved. The provider answered. Try it from a private window before you sign out."
+                : "Saved.");
+        }
+        catch (AdminException ex)
+        {
+            _status = new(false, ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

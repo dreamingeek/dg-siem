@@ -34,6 +34,8 @@ public static class AdminCli
           user passwd <email>                                  (new generated password, clears lockout)
           user 2fa-reset <email>                               (turn off two-factor, e.g. a lost phone)
           user 2fa-required on|off                             (require two-factor for everyone)
+          user sso-unlink <email>                              (remove their single sign-on link)
+          sso off                                              (turn single sign-on off, e.g. the provider is down)
           user grant <email> <tenant> [viewer|admin]
           user revoke <email> <tenant>
           user admin <email> on|off                            (global admin: sees every tenant)
@@ -49,7 +51,7 @@ public static class AdminCli
     private static readonly JsonSerializerOptions Pretty = new(AgentJsonContext.Default.Options) { WriteIndented = true };
 
     public static bool IsCommand(string[] args) =>
-        args.Length > 0 && args[0] is "tenant" or "token" or "agent" or "drop" or "user" or "backup" or "help" or "--help";
+        args.Length > 0 && args[0] is "tenant" or "token" or "agent" or "drop" or "user" or "sso" or "backup" or "help" or "--help";
 
     public static async Task<int> RunAsync(IServiceProvider services, string[] args)
     {
@@ -201,6 +203,33 @@ public static class AdminCli
                     var user = await FindUserAsync(users, email);
                     await DreaminGeek.Siem.Web.Admin.AdminService.ResetTwoFactorAsync(users, user);
                     Console.WriteLine($"Two-factor turned off for {user.Email}; they can sign in with their password and set it up again.");
+                    return 0;
+                }
+
+                case ["user", "sso-unlink", var email]:
+                {
+                    var user = await FindUserAsync(users, email);
+                    await DreaminGeek.Siem.Web.Admin.AdminService.UnlinkSsoAsync(users, user);
+                    Console.WriteLine($"Single sign-on unlinked for {user.Email}; their sessions end within a minute.");
+                    return 0;
+                }
+
+                case ["sso", "off"]:
+                {
+                    // Edits the same setting as Administration → Users, without needing the settings service.
+                    var row = await db.AppSettings.FirstOrDefaultAsync(x => x.Key == DreaminGeek.Siem.Alerting.SettingsStore.SsoKey);
+                    if (row is null)
+                    {
+                        Console.WriteLine("Single sign-on isn't set up.");
+                        return 0;
+                    }
+                    var json = System.Text.Json.Nodes.JsonNode.Parse(row.Value)!.AsObject();
+                    json["enabled"] = false;
+                    json["passwordsAdminsOnly"] = false;
+                    row.Value = json.ToJsonString();
+                    row.UpdatedAt = DateTimeOffset.UtcNow;
+                    await db.SaveChangesAsync();
+                    Console.WriteLine("Single sign-on is off and everyone can sign in with a password. Restart the server to apply it.");
                     return 0;
                 }
 

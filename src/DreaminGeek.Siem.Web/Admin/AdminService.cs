@@ -17,7 +17,7 @@ namespace DreaminGeek.Siem.Web.Admin;
 public sealed class AdminException(string message) : Exception(message);
 
 public sealed record TenantSummary(Guid Id, string Slug, string Name, int Agents, int Users, DateTimeOffset CreatedAt);
-public sealed record UserSummary(Guid Id, string Email, string DisplayName, bool IsGlobalAdmin, bool Locked, IReadOnlyList<(string Tenant, TenantRole Role)> Grants, bool TwoFactor = false);
+public sealed record UserSummary(Guid Id, string Email, string DisplayName, bool IsGlobalAdmin, bool Locked, IReadOnlyList<(string Tenant, TenantRole Role)> Grants, bool TwoFactor = false, string? SsoAccount = null);
 public sealed record DropRuleSummary(Guid Id, string Name, string? Tenant, string? Dataset, string? Field, string Match, string? Value, bool Enabled, long Dropped, DateTimeOffset? LastDropped);
 
 /// <summary>
@@ -402,9 +402,12 @@ public sealed class AdminService(
         await access.RequireGlobalAdminAsync(caller, "Only global admins can do this.", ct);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var users = await db.Users.Include(u => u.Memberships).ThenInclude(m => m.Tenant).OrderBy(u => u.Email).ToListAsync(ct);
+        var sso = (await db.UserLogins.AsNoTracking().Where(l => l.LoginProvider == Sso.Scheme).ToListAsync(ct))
+            .GroupBy(l => l.UserId).ToDictionary(g => g.Key, g => g.First().ProviderDisplayName ?? g.First().ProviderKey);
         var now = DateTimeOffset.UtcNow;
         return users.Select(u => new UserSummary(u.Id, u.Email ?? string.Empty, u.DisplayName, u.IsGlobalAdmin, u.LockoutEnd > now,
-            u.Memberships.OrderBy(m => m.Tenant.Slug).Select(m => (m.Tenant.Slug, m.Role)).ToList(), u.TwoFactorEnabled)).ToList();
+            u.Memberships.OrderBy(m => m.Tenant.Slug).Select(m => (m.Tenant.Slug, m.Role)).ToList(), u.TwoFactorEnabled,
+            sso.GetValueOrDefault(u.Id))).ToList();
     }
 
     /// <summary>Creates a user with a generated password, which is returned (shown once).</summary>
@@ -464,6 +467,25 @@ public sealed class AdminService(
         await users.GenerateNewTwoFactorRecoveryCodesAsync(user, 0);
         await users.SetLockoutEndDateAsync(user, null);
         await users.ResetAccessFailedCountAsync(user);
+        await users.UpdateSecurityStampAsync(user);
+    }
+
+    /// <summary>Removes the user's single sign-on link and signs out their sessions.</summary>
+    public async Task UnlinkSsoAsync(UserAccess? caller, Guid userId, CancellationToken ct)
+    {
+        await access.RequireGlobalAdminAsync(caller, "Only global admins can do this.", ct);
+        await using var scope = scopes.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<SiemUser>>();
+        var user = await users.FindByIdAsync(userId.ToString()) ?? throw new AdminException("That user no longer exists.");
+        await UnlinkSsoAsync(users, user);
+    }
+
+    internal static async Task UnlinkSsoAsync(UserManager<SiemUser> users, SiemUser user)
+    {
+        foreach (var login in (await users.GetLoginsAsync(user)).Where(l => l.LoginProvider == Sso.Scheme).ToList())
+        {
+            Check(await users.RemoveLoginAsync(user, login.LoginProvider, login.ProviderKey));
+        }
         await users.UpdateSecurityStampAsync(user);
     }
 

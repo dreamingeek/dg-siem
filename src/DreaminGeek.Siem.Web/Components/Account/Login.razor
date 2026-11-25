@@ -7,11 +7,18 @@
 @attribute [AllowAnonymous]
 @layout DreaminGeek.Siem.Web.Components.Layout.EmptyLayout
 @inject SignInManager<SiemUser> SignIn
+@inject UserManager<SiemUser> Users
+@inject SsoService Sso
 @inject NavigationManager Nav
 
 <PageTitle>Sign in · DG SIEM</PageTitle>
 
-<AuthCard Title="Sign in" Error="@_error">
+<AuthCard Title="Sign in" Error="@(_error ?? SsoMessage)">
+    @if (Sso.Current.Ready)
+    {
+        <a class="btn btn-primary w-100" href="@($"/account/sso{(string.IsNullOrEmpty(ReturnUrl) ? "" : "?returnUrl=" + Uri.EscapeDataString(ReturnUrls.Safe(ReturnUrl)))}")" data-enhance-nav="false">Sign in with @Sso.Current.ButtonLabel</a>
+        <div class="dg-auth-or small text-body-secondary my-3"><span>@(Sso.Current.PasswordsAdminsOnly ? "or, for global admins, a password" : "or with a password")</span></div>
+    }
     <EditForm Model="Input!" method="post" OnValidSubmit="SignInAsync" FormName="login">
         <DataAnnotationsValidator />
         <div class="mb-3">
@@ -24,7 +31,7 @@
             <InputText id="password" type="password" class="form-control" @bind-Value="Input!.Password" autocomplete="current-password" />
             <ValidationMessage For="() => Input!.Password" class="small" />
         </div>
-        <button type="submit" class="btn btn-primary w-100">Sign in</button>
+        <button type="submit" class="btn @(Sso.Current.Ready ? "btn-outline-secondary" : "btn-primary") w-100">Sign in</button>
     </EditForm>
     <p class="text-body-secondary small mt-4 mb-0">
         First time here? Create an admin account on the server with
@@ -39,12 +46,41 @@
     [SupplyParameterFromQuery]
     private string? ReturnUrl { get; set; }
 
+    /// <summary>How single sign-on went, when it sent the browser back here.</summary>
+    [SupplyParameterFromQuery(Name = "sso")]
+    private string? SsoResult { get; set; }
+
+    private string? SsoMessage => SsoResult switch
+    {
+        "unlinked" => $"Your {Sso.Current.ButtonLabel} account isn't linked to a DG SIEM account. Sign in with your password once and link it from your account page, or ask an admin to add you.",
+        "locked" => "This account is locked after too many wrong passwords. Try again in 15 minutes, or ask an admin to unlock it.",
+        "cancelled" => "Sign-in was cancelled.",
+        "failed" => $"Signing in with {Sso.Current.ButtonLabel} didn't work. Try again; if it keeps failing, an admin can check the server log.",
+        _ => null,
+    };
+
     private string? _error;
 
     protected override void OnInitialized() => Input ??= new LoginInput();
 
     private async Task SignInAsync()
     {
+        if (Sso.Current is { Ready: true, PasswordsAdminsOnly: true })
+        {
+            // Passwords are for global admins only. Check the password first, so a wrong guess doesn't learn who's an admin.
+            var user = await Users.FindByEmailAsync(Input!.Email.Trim());
+            var check = user is null ? Microsoft.AspNetCore.Identity.SignInResult.Failed : await SignIn.CheckPasswordSignInAsync(user, Input.Password, lockoutOnFailure: true);
+            if (!check.Succeeded)
+            {
+                _error = check.IsLockedOut ? "Too many attempts. Try again in 15 minutes." : "Invalid email or password.";
+                return;
+            }
+            if (!user!.IsGlobalAdmin)
+            {
+                _error = $"Use Sign in with {Sso.Current.ButtonLabel}. Passwords are only for global admins here.";
+                return;
+            }
+        }
         var result = await SignIn.PasswordSignInAsync(Input!.Email.Trim(), Input.Password, isPersistent: false, lockoutOnFailure: true);
         if (result.Succeeded)
         {
